@@ -8,7 +8,7 @@ Located in LAMMPS package directory: `src/COUPLB/`
 
 | File | Purpose |
 |------|---------|
-| `couplb_lattice.h` | Grid management, lattice descriptors, macroscopic field computation, diagnostics |
+| `couplb_lattice.h` `couplb_lattice.cpp`| Grid management, lattice descriptors, macroscopic field computation, diagnostics |
 | `couplb_lattice.cpp` | Grid management, lattice descriptors, macroscopic field computation, diagnostics |
 | `couplb_collision.h` | BGK collision operator with Guo forcing scheme |
 | `couplb_streaming.h` | Pull streaming implementation, bounce-back boundaries, MPI halo exchange |
