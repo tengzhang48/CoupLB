@@ -1,3 +1,8 @@
+// clang-format off
+#ifdef FIX_CLASS
+FixStyle(couplb,FixCoupLB);
+#else
+
 #ifndef FIX_COUPLB_H
 #define FIX_COUPLB_H
 
@@ -71,3 +76,4 @@ private:
 } // namespace LAMMPS_NS
 
 #endif // FIX_COUPLB_H
+#endif // FIX_CLASS
