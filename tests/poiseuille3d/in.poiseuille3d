@@ -1,4 +1,11 @@
 # 3D Poiseuille flow in a channel (walls in y, periodic in x and z)
+#
+# Analytical (half-way bounce-back):
+#   Wall positions: y=0.5 and y=32.5, H_eff = 32
+#   u(y) = g/(2*nu) * y * (H - y)
+#   u_max = g*H^2/(8*nu) = 5e-6 * 1024 / 0.8 = 6.4e-3
+#   Ma = u_max / cs = 6.4e-3 / 0.577 ~ 0.011
+#
 units           lj
 dimension       3
 boundary        p f p
@@ -6,15 +13,23 @@ atom_style      atomic
 
 region          box block 0.0 8.0 0.0 32.0 0.0 8.0
 create_box      1 box
-create_atoms    1 single 4.0 16.0 4.0
+
+# Dummy atom required by LAMMPS — placed outside the channel
+# center to minimize any accidental influence if grouping fails
+create_atoms    1 single 4.0 0.5 4.0
 mass            1 1.0
-group           fluid empty
+
+# CRITICAL: Exclude dummy atom from IBM coupling.
+# Without this, the stationary atom acts as a drag point and
+# reduces the flow velocity by ~28%.
+group           noatoms empty
+
 pair_style      none
 timestep        1.0
 
-fix  flow all couplb 8 32 8 0.1 1.0 &
+fix  flow noatoms couplb 8 32 8 0.1 1.0 &
      wall_y 1 1 &
-     gravity 1e-5 0.0 0.0 &
+     gravity 5e-6 0.0 0.0 &
      output 5000 couplb_poiseuille3d.dat &
      check_every 2000
 
