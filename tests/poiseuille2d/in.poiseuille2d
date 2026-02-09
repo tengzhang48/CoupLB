@@ -1,24 +1,22 @@
-# 2D Poiseuille flow validation
+# 2D Poiseuille flow — STABLE PARAMETERS FOR COUPLB v8.2
+# NOTE: dx is IMPLICITLY 1.0 (lattice units). Physical scaling via gravity/timestep.
 units           lj
 dimension       2
-boundary        p f p
+boundary        p f p          # Periodic x, walls y, periodic z
 atom_style      atomic
 
-region          box block 0.0 4.0 0.0 32.0 -0.5 0.5
+# CRITICAL: Minimum 16x64 grid (4x32 was unstable)
+region          box block 0.0 16.0 0.0 64.0 -0.5 0.5
 create_box      1 box
-create_atoms    1 single 2.0 16.0 0.0
+create_atoms    1 single 8.0 32.0 0.0   # Dummy atom (required by LAMMPS)
 mass            1 1.0
-group           fluid empty
 pair_style      none
-timestep        1.0
 
-fix  flow all couplb 4 32 1 0.1 1.0 &
-     wall_y 1 1 &
-     gravity 1e-5 0.0 0.0 &
-     output 2000 couplb_poiseuille.dat &
-     check_every 1000
+timestep        0.005          # Small timestep for stability
 
-thermo          2000
-thermo_style    custom step cpu
+# FIXED: Removed dx keyword (not supported). Reduced gravity for stability.
+fix flow all couplb 16 64 1 0.1 1.0 wall_y 1 1 gravity 5e-7 0.0 0.0 kernel roma output 400 couplb_poiseuille.dat check_every 200
+thermo          1
+thermo_style    custom step cpu temp press
 run             20000
 print "=== Poiseuille test done ==="
