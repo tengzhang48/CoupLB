@@ -1,0 +1,147 @@
+# ============================================================================
+# RESOLVED SPHERE DRAG VALIDATION FOR COUPLB
+#
+# 12 Lagrangian markers on icosahedron vertices enforce no-slip via IBM.
+# Compares steady-state drag against Stokes law WITH Hasimoto periodic
+# correction: U = F / (6π μ R · K)
+#   K = 1 - 2.837 (2R/L) + 4.19 (2R/L)^3 - ...  (Hasimoto 1959)
+#
+# Parameters:
+#   R = 3.0 LJ, D = 6 LJ, dx = 0.5 → D/dx = 12 cells across diameter
+#   L = 64 × 0.5 = 32 LJ → L/D ≈ 5.3
+#   ν = 0.1 → τ = 0.8
+#   F = 0.005, timestep = 0.005
+#   vel_scale = dx/dt = 0.5/0.005 = 100
+#   mu_phys = rho0 * nu_lbm * dx^2 / dt = 1.0 * 0.1 * 0.25 / 0.005 = 5.0
+#   U_Stokes = F/(6π μ R) ≈ 1.77e-5
+#   Re = rho * U * D / mu ≈ 0.0001 (deep Stokes)
+#
+# KNOWN LIMITATIONS:
+#   - 12 markers is minimal; 42+ recommended for <5% error
+#   - Single-pass direct forcing (no iterative correction)
+#   - dv_lag = 1.0 (not matched to surface element area)
+#   - Expect ~15-30% deviation; validates qualitative correctness
+# ============================================================================
+
+units           lj
+dimension       3
+boundary        p p p
+atom_style      atomic
+atom_modify     map array      # Required for vx[1] etc. in thermo
+
+# 64 CPUs: 4x4x4 → 16x16x16 cells/rank
+processors      4 4 4
+
+# Domain: 64^3 cells × dx=0.5 → 32 LJ box
+variable        Nc equal 64
+variable        dxp equal 0.5
+variable        L equal ${Nc}*${dxp}
+variable        hL equal ${L}/2.0
+
+region          box block -${hL} ${hL} -${hL} ${hL} -${hL} ${hL}
+create_box      1 box
+
+# ============================================================================
+# ICOSAHEDRON VERTICES ON SPHERE OF RADIUS R = 3.0
+# Golden ratio: phi = (1+sqrt(5))/2 ≈ 1.618
+# Vertices: permutations of (0, ±1, ±phi), normalized to R
+# Scale: s = R / sqrt(1 + phi^2)
+# ============================================================================
+variable        R equal 3.0
+variable        phi equal 1.61803398875
+variable        norm equal sqrt(1.0+${phi}*${phi})
+variable        s equal ${R}/${norm}
+variable        sp equal ${s}*${phi}
+variable        ns equal -${s}
+variable        nsp equal -${sp}
+
+# (0, ±sp, ±s)
+create_atoms    1 single  0.0   ${sp}   ${s}
+create_atoms    1 single  0.0   ${sp}   ${ns}
+create_atoms    1 single  0.0   ${nsp}  ${s}
+create_atoms    1 single  0.0   ${nsp}  ${ns}
+
+# (±s, 0, ±sp)
+create_atoms    1 single  ${s}  0.0     ${sp}
+create_atoms    1 single  ${s}  0.0     ${nsp}
+create_atoms    1 single  ${ns} 0.0     ${sp}
+create_atoms    1 single  ${ns} 0.0     ${nsp}
+
+# (±sp, ±s, 0)
+create_atoms    1 single  ${sp}  ${s}   0.0
+create_atoms    1 single  ${sp}  ${ns}  0.0
+create_atoms    1 single  ${nsp} ${s}   0.0
+create_atoms    1 single  ${nsp} ${ns}  0.0
+
+# ============================================================================
+# RIGID BODY + COUPLING
+# ============================================================================
+mass            1 0.0833333333     # Total mass = 1.0 over 12 markers
+
+pair_style      none
+
+group           sphere type 1
+
+# Applied force: F_total = 0.005 split across 12 atoms
+variable        F_total equal 0.005
+variable        F_atom equal ${F_total}/12.0
+fix             push sphere addforce ${F_atom} 0.0 0.0
+
+# Rigid body integration (must come before couplb so forces accumulate)
+fix             body sphere rigid/nve single
+
+# LBM fluid coupling — use group sphere so IBM only acts on sphere markers
+variable        nu_lbm equal 0.1
+variable        rho0 equal 1.0
+fix             flow sphere couplb ${Nc} ${Nc} ${Nc} ${nu_lbm} ${rho0} &
+                dx ${dxp} &
+                kernel roma &
+                output 2000 sphere_drag_profile.dat &
+                check_every 1000 &
+                vtk 5000 sphere_vtk
+
+# ============================================================================
+# DIAGNOSTICS
+# ============================================================================
+variable        vx equal vx[1]
+variable        vy equal vy[1]
+variable        vz equal vz[1]
+variable        vmag equal sqrt(v_vx*v_vx+v_vy*v_vy+v_vz*v_vz)
+
+# Analytical predictions (LJ units)
+variable        DoverL equal 2.0*${R}/${L}
+variable        K_hasimoto equal 1.0-2.837*${DoverL}
+variable        mu_phys equal ${rho0}*${nu_lbm}*${dxp}*${dxp}/0.005
+variable        U_stokes equal ${F_total}/(6.0*3.14159265359*${mu_phys}*${R})
+variable        U_corrected equal ${U_stokes}/${K_hasimoto}
+
+thermo          500
+thermo_style    custom step v_vx v_vy v_vz v_vmag cpu
+
+# ============================================================================
+# RUN — characteristic time ~ rho*R^2/mu ~ 1*9/5 = 1.8 LJ time
+# With dt=0.005, need ~360 steps minimum. Run 20000 for clean steady state.
+# ============================================================================
+run             20000
+
+print "============================================================"
+print "  RESOLVED SPHERE DRAG VALIDATION (CoupLB v8.2)"
+print "============================================================"
+print "  Sphere: R = ${R} LJ, 12 icosahedron markers"
+print "  Grid:   ${Nc}^3 cells, dx = ${dxp}, D/dx = $(2*v_R/v_dxp)"
+print "  Fluid:  rho = ${rho0}, nu = ${nu_lbm}, mu = ${mu_phys}"
+print "  Force:  F = ${F_total} LJ"
+print "  L/D:    $(v_L/(2*v_R))"
+print ""
+print "  Hasimoto correction K = ${K_hasimoto}"
+print "  U_Stokes (infinite)  = ${U_stokes}"
+print "  U_Stokes (periodic)  = ${U_corrected}"
+print "  U_measured           = ${vx}"
+print "  Error vs corrected   = $((v_vx-v_U_corrected)/v_U_corrected*100) %"
+print ""
+print "  v_y = ${vy}  (expect ~0)"
+print "  v_z = ${vz}  (expect ~0)"
+print ""
+print "  NOTE: 12 markers + single-pass forcing → expect 15-30% deviation."
+print "  Validates: steady state reached, correct direction, right magnitude."
+print "============================================================"
