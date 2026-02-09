@@ -163,7 +163,6 @@ void FixCoupLB::init()
   if (output_every>0) next_output = update->ntimestep;
   next_check = (check_every>0) ? update->ntimestep+check_every : -1;
   next_vtk = (vtk_every>0) ? update->ntimestep : -1;
-  vtk_steps.clear();
   next_checkpoint = (checkpoint_every>0) ? update->ntimestep+checkpoint_every : -1;
   lbm_step_count = 0;
 
@@ -295,6 +294,11 @@ void FixCoupLB::do_lbm_step(CoupLB::Grid<L>& g, CoupLB::BGK<L>& b, CoupLB::Strea
   s.exchange(g);
   s.stream(g);
   enforce_wall_ghost_fields(g);
+  // IMPORTANT: clear_forces() MUST stay at the END of lbm_step, not the start.
+  // IBM reaction forces are spread during do_ibm_coupling() AFTER this function
+  // returns. Those forces must survive until the NEXT call to do_lbm_step(),
+  // where they enter via Guo forcing in collide(). Moving clear to the start
+  // would destroy them before collision uses them.
   g.clear_forces();
 }
 
@@ -341,14 +345,14 @@ void FixCoupLB::do_ibm_coupling(CoupLB::Grid<L>& g, CoupLB::Streaming<L>& s) {
   // Local IBM work — only ranks with particles do interpolation/spreading
   for (int i=0;i<nl;i++) {
     if (!(mk[i]&groupbit)) continue;
-    auto uf = CoupLB::IBM<L>::interpolate(g, x[i][0], x[i][1], x[i][2], domain_lo, ibm_kernel);
+    auto uf = CoupLB::IBM<L>::interpolate(g, x[i][0], x[i][1], x[i][2], domain_lo, dx_phys, ibm_kernel);
     const double ux=uf[0]*vel_scale, uy=uf[1]*vel_scale, uz=uf[2]*vel_scale;
     const double dt=update->dt;
     const double m = atom->rmass ? atom->rmass[i] : atom->mass[atom->type[i]];
     const double fx=m*(ux-v[i][0])/dt, fy=m*(uy-v[i][1])/dt, fz=m*(uz-v[i][2])/dt;
     f[i][0]+=fx; f[i][1]+=fy; f[i][2]+=fz;
     constexpr double dv=1.0;
-    CoupLB::IBM<L>::spread(g, x[i][0],x[i][1],x[i][2], -fx/force_scale,-fy/force_scale,-fz/force_scale, dv, domain_lo, ibm_kernel);
+    CoupLB::IBM<L>::spread(g, x[i][0],x[i][1],x[i][2], -fx/force_scale,-fy/force_scale,-fz/force_scale, dv, domain_lo, dx_phys, ibm_kernel);
   }
 
   // Reverse force exchange: accumulate forces from ghost cells back
@@ -422,7 +426,7 @@ void FixCoupLB::end_of_step() {
     if (chk) check_stability_precomputed(*grid3d);
     if (out) write_profile(*grid3d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx_phys);
+      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx_phys, vel_scale, force_scale);
       vtk_steps.push_back((long)step);
       if (comm->me==0) CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_lbm);
     }
@@ -432,7 +436,7 @@ void FixCoupLB::end_of_step() {
     if (chk) check_stability_precomputed(*grid2d);
     if (out) write_profile(*grid2d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx_phys);
+      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx_phys, vel_scale, force_scale);
       vtk_steps.push_back((long)step);
       if (comm->me==0) CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_lbm);
     }

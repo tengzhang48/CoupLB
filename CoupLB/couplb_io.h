@@ -37,7 +37,8 @@ public:
 
   static void write_vtk(const Grid<Lattice>& grid, MPI_Comm comm,
                         long step, const std::string& prefix,
-                        const double domain_lo[3], double dx_phys)
+                        const double domain_lo[3], double dx_phys,
+                        double vel_scale = 1.0, double force_scale = 1.0)
   {
     int rank, nprocs;
     MPI_Comm_rank(comm, &rank);
@@ -63,12 +64,12 @@ public:
         for (int i = 0; i < nlx; i++) {
           const int n = grid.lidx(i, j, k);
           l_rho[c]  = grid.rho[n];
-          l_ux[c]   = grid.ux[n];
-          l_uy[c]   = grid.uy[n];
-          l_uz[c]   = grid.uz[n];
-          l_fx[c]   = grid.fx[n];
-          l_fy[c]   = grid.fy[n];
-          l_fz[c]   = grid.fz[n];
+          l_ux[c]   = grid.ux[n] * vel_scale;
+          l_uy[c]   = grid.uy[n] * vel_scale;
+          l_uz[c]   = grid.uz[n] * vel_scale;
+          l_fx[c]   = grid.fx[n] * force_scale;
+          l_fy[c]   = grid.fy[n] * force_scale;
+          l_fz[c]   = grid.fz[n] * force_scale;
           l_type[c] = grid.type[n];
           c++;
         }
@@ -167,7 +168,7 @@ public:
               domain_lo[0], domain_lo[1], domain_lo[2],
               dx_phys, dx_phys, dx_phys);
       fprintf(fp, "    <Piece Extent=\"0 %d 0 %d 0 %d\">\n", Nx, Ny, Nz);
-      fprintf(fp, "      <CellData Scalars=\"rho\" Vectors=\"velocity\">\n");
+      fprintf(fp, "      <CellData Scalars=\"rho\" Vectors=\"velocity_phys\">\n");
 
       // rho
       fprintf(fp, "        <DataArray type=\"Float64\" Name=\"rho\" format=\"ascii\">\n");
@@ -175,8 +176,8 @@ public:
         fprintf(fp, "%.8e\n", rho[n]);
       fprintf(fp, "        </DataArray>\n");
 
-      // velocity
-      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"velocity\" "
+      // velocity (physical units)
+      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"velocity_phys\" "
                   "NumberOfComponents=\"3\" format=\"ascii\">\n");
       for (size_t n = 0; n < ntot; n++)
         fprintf(fp, "%.8e %.8e %.8e\n", ux[n], uy[n], uz[n]);
@@ -188,8 +189,8 @@ public:
         fprintf(fp, "%d\n", type[n]);
       fprintf(fp, "        </DataArray>\n");
 
-      // force
-      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"force\" "
+      // force (physical units)
+      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"force_phys\" "
                   "NumberOfComponents=\"3\" format=\"ascii\">\n");
       for (size_t n = 0; n < ntot; n++)
         fprintf(fp, "%.8e %.8e %.8e\n", fx[n], fy[n], fz[n]);
