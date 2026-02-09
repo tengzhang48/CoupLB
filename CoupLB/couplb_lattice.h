@@ -137,6 +137,7 @@ fx[n] = fy[n] = fz[n] = 0.0;
 for (int q = 0; q < Q; q++)
 fi(q, n) = feq(q, rho0, ux0, uy0, uz0);
 }
+f_buf = f;  // Ensure swap buffer matches initial state
 }
 void compute_macroscopic(bool guo_correction = true) {
 const int klo = (D == 3) ? 1 : 0;
@@ -162,11 +163,16 @@ sw += Lattice::e[q][2] * fval;
 // and external force all read rho[n] directly. Storing a
 // negative density would poison downstream computations.
 if (r <= Constants::RHO_MIN) {
-r = Constants::RHO_MIN;
-local_clamp_count++;  // COUNT THE CLAMP EVENT
+    r = Constants::RHO_MIN;
+    local_clamp_count++;
+}
+// Safety net for corrupted values (should never trigger if physics is correct)
+if (!std::isfinite(r)) {
+    r = Constants::RHO_MIN;
+    local_clamp_count++;  // Count as clamp event
 }
 rho[n] = r;
-const double inv_r = 1.0 / r;
+const double inv_r = 1.0 / r;  // Now guaranteed safe
 if (guo_correction) {
 ux[n] = (su + 0.5 * fx[n]) * inv_r;
 uy[n] = (sv + 0.5 * fy[n]) * inv_r;
