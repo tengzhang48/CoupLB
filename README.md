@@ -9,7 +9,7 @@
 - **Lattices:** D2Q9 (2D) and D3Q19 (3D)
 - **Collision:** BGK with Guo forcing scheme
 - **Fluid–structure coupling:** Immersed Boundary Method with Roma (3-point) or Peskin (4-point) delta kernels
-- **Boundaries:** Half-way bounce-back walls, moving velocity walls (Couette), periodic
+- **Boundaries:** No-slip (half-way bounce-back), moving velocity (Couette), free-slip (specular reflection), open (zero-gradient extrapolation), periodic
 - **Sub-stepping:** Multiple MD steps per LBM step (`md_per_lb`) with momentum-conserving IBM coupling each sub-step
 - **External forcing:** Constant or time-varying body forces via LAMMPS equal-style variables
 - **Parallelism:** MPI domain decomposition (mirrors LAMMPS proc grid), optional OpenMP threading
@@ -95,8 +95,9 @@ fix ID group couplb Nx Ny Nz nu rho0 [keywords...]
 | `xi_ibm` | value | 1.0 | IBM relaxation factor (0 < ξ ≤ 1). Scales the penalty force that couples particles to the fluid. Values less than 1.0 soften the coupling. |
 | `gravity` | gx gy gz | 0 0 0 | Body force acceleration on the fluid, in **LAMMPS units**. Each component can be a numeric constant or a LAMMPS equal-style variable reference (`v_varname`). Converted internally via g\* = g × dt\_LB² / dx. |
 | `dx` | value | Lx/Nx | Physical grid spacing in **LAMMPS units**. Must satisfy Nx × dx = Lx. If omitted, computed automatically from the simulation box. |
-| `wall_y` | lo hi | 0 0 | Y-boundary type: 0 = periodic, 1 = no-slip wall, 2 = moving wall. |
-| `wall_z` | lo hi | 0 0 | Z-boundary type (3D only): 0 = periodic, 1 = no-slip wall, 2 = moving wall. |
+| `wall_x` | lo hi | 0 0 | X-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
+| `wall_y` | lo hi | 0 0 | Y-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
+| `wall_z` | lo hi | 0 0 | Z-boundary type (3D only): 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
 | `wall_vel` | vx vy vz | 0 0 0 | Velocity for type-2 (moving) walls, in **LAMMPS units**. Converted to lattice units internally. |
 | `kernel` | type | roma | IBM delta function: `roma` (3-point) or `peskin4` (4-point). |
 | `vtk` | N prefix | off | Write VTK field snapshot every N LAMMPS steps. |
@@ -245,7 +246,7 @@ Fields written:
 | `rho` | 1 (scalar) | Lattice units |
 | `velocity_phys` | 3 (vector) | LAMMPS physical units |
 | `force_phys` | 3 (vector) | LAMMPS physical units |
-| `type` | 1 (scalar) | 0 = fluid, 1 = no-slip wall, 2 = moving wall |
+| `type` | 1 (scalar) | 0 = fluid, 1 = no-slip wall, 2 = moving wall, 3 = free-slip, 4 = open |
 
 ### ASCII Profiles
 
@@ -467,4 +468,3 @@ run 100000
 - **No adaptive mesh refinement.**
 - **Checkpoint portability:** Checkpoints are tied to the same processor count and decomposition. Cannot restart on a different number of ranks.
 - **VTK gathering:** All VTK data is gathered to rank 0 and written as ASCII. This limits scalability for very large grids.
-- **No x-direction walls:** Only y-walls and z-walls are supported via keywords. X-direction is always periodic or handled by the LAMMPS boundary setting.

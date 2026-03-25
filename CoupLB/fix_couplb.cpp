@@ -33,9 +33,9 @@ using namespace FixConst;
      xi_ibm value        IBM penalty relaxation factor, 0 < xi <= 1
      gravity gx gy gz    body force acceleration;
                          each component can be a constant or v_varname
-     wall_x lo hi        x-boundary: 0=periodic 1=wall 2=moving 3=free-slip 4=open
-     wall_y lo hi        y-boundary: 0=periodic 1=wall 2=moving 3=free-slip 4=open
-     wall_z lo hi        z-boundary (3D only)
+     wall_x lo hi        x-boundary: 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
+     wall_y lo hi        y-boundary: 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
+     wall_z lo hi        z-boundary (3D only): 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
      wall_vel vx vy vz   velocity for type-2 walls
      dx value            grid spacing (default Lx/Nx)
      output N file       write velocity profile every N steps
