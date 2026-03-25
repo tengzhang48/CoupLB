@@ -54,7 +54,7 @@ private:
   int gxstyle, gystyle, gzstyle;
 
   double wall_vel[3];
-  int wall_ylo, wall_yhi, wall_zlo, wall_zhi;
+  int wall_xlo, wall_xhi, wall_ylo, wall_yhi, wall_zlo, wall_zhi;
   double domain_lo[3], domain_hi[3];
 
   int output_every;

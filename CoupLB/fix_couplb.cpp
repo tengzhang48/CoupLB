@@ -33,7 +33,8 @@ using namespace FixConst;
      xi_ibm value        IBM penalty relaxation factor, 0 < xi <= 1
      gravity gx gy gz    body force acceleration;
                          each component can be a constant or v_varname
-     wall_y lo hi        y-boundary: 0=periodic 1=wall 2=moving
+     wall_x lo hi        x-boundary: 0=periodic 1=wall 2=moving 3=free-slip 4=open
+     wall_y lo hi        y-boundary: 0=periodic 1=wall 2=moving 3=free-slip 4=open
      wall_z lo hi        z-boundary (3D only)
      wall_vel vx vy vz   velocity for type-2 walls
      dx value            grid spacing (default Lx/Nx)
@@ -61,7 +62,7 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
   gx_ext = gy_ext = gz_ext = 0.0;
   gxstyle = gystyle = gzstyle = NONE_G;
   gxvar = gyvar = gzvar = -1;
-  wall_ylo = wall_yhi = wall_zlo = wall_zhi = 0;
+  wall_xlo = wall_xhi = wall_ylo = wall_yhi = wall_zlo = wall_zhi = 0;
   wall_vel[0] = wall_vel[1] = wall_vel[2] = 0.0;
   dx = 0.0;
   output_every = 0; output_file = "couplb_profile.dat";
@@ -104,6 +105,9 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
         gzstyle = CONSTANT_G;
       }
       iarg+=4;
+    } else if (strcmp(arg[iarg],"wall_x")==0) {
+      if (iarg+3>narg) error->all(FLERR,"fix couplb wall_x: need 2 values");
+      wall_xlo=std::stoi(arg[iarg+1]); wall_xhi=std::stoi(arg[iarg+2]); iarg+=3;
     } else if (strcmp(arg[iarg],"wall_y")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb wall_y: need 2 values");
       wall_ylo=std::stoi(arg[iarg+1]); wall_yhi=std::stoi(arg[iarg+2]); iarg+=3;
@@ -286,6 +290,7 @@ void FixCoupLB::init()
       fprintf(screen,"CoupLB: gravity=(%.2e,%.2e,%.2e) -> lattice=(%.2e,%.2e,%.2e)\n",
               gx_ext,gy_ext,gz_ext, gx_ext*accel_conv,gy_ext*accel_conv,gz_ext*accel_conv);
     }
+    if (wall_xlo||wall_xhi) fprintf(screen,"CoupLB: x-walls lo=%d hi=%d\n",wall_xlo,wall_xhi);
     if (wall_ylo||wall_yhi) fprintf(screen,"CoupLB: y-walls lo=%d hi=%d\n",wall_ylo,wall_yhi);
     if (wall_zlo||wall_zhi) fprintf(screen,"CoupLB: z-walls lo=%d hi=%d\n",wall_zlo,wall_zhi);
     if (uw > CoupLB::Constants::ZERO_TOL)
@@ -341,15 +346,18 @@ void FixCoupLB::setup_grid()
 
 void FixCoupLB::setup_boundaries(const double wv_lb[3])
 {
+  bool axlo=comm->myloc[0]==0, axhi=comm->myloc[0]==comm->procgrid[0]-1;
   bool aylo=comm->myloc[1]==0, ayhi=comm->myloc[1]==comm->procgrid[1]-1;
   bool azlo=comm->myloc[2]==0, azhi=comm->myloc[2]==comm->procgrid[2]-1;
   if (is3d) {
     auto& g=*grid3d;
+    if (wall_xlo||wall_xhi) CoupLB::Boundary<CoupLB::D3Q19>::set_walls_x(g,axlo&&wall_xlo>0,axhi&&wall_xhi>0,wall_xlo,wall_xhi);
     if (wall_ylo||wall_yhi) CoupLB::Boundary<CoupLB::D3Q19>::set_walls_y(g,aylo&&wall_ylo>0,ayhi&&wall_yhi>0,wall_ylo,wall_yhi);
     if (wall_zlo||wall_zhi) CoupLB::Boundary<CoupLB::D3Q19>::set_walls_z(g,azlo&&wall_zlo>0,azhi&&wall_zhi>0,wall_zlo,wall_zhi);
     CoupLB::Boundary<CoupLB::D3Q19>::set_wall_velocity(g,2,wv_lb[0],wv_lb[1],wv_lb[2]);
   } else {
     auto& g=*grid2d;
+    if (wall_xlo||wall_xhi) CoupLB::Boundary<CoupLB::D2Q9>::set_walls_x(g,axlo&&wall_xlo>0,axhi&&wall_xhi>0,wall_xlo,wall_xhi);
     if (wall_ylo||wall_yhi) CoupLB::Boundary<CoupLB::D2Q9>::set_walls_y(g,aylo&&wall_ylo>0,ayhi&&wall_yhi>0,wall_ylo,wall_yhi);
     CoupLB::Boundary<CoupLB::D2Q9>::set_wall_velocity(g,2,wv_lb[0],wv_lb[1],0);
   }
@@ -501,6 +509,8 @@ void FixCoupLB::apply_external_force(CoupLB::Grid<L>& g)
    The fluid velocity field is computed ONCE per LBM cycle (first
    substep only), but the penalty force is recomputed every substep
    using the particle's CURRENT velocity and position.
+
+
 ------------------------------------------------------------------ */
 void FixCoupLB::ibm_sub_coupling()
 {
@@ -575,6 +585,8 @@ void FixCoupLB::enforce_wall_ghost_fields(CoupLB::Grid<L>& g)
   for (int n=0;n<g.ntotal;n++) {
     if (g.type[n]==1) { g.rho[n]=rho_lb; g.ux[n]=g.uy[n]=g.uz[n]=0; }
     else if (g.type[n]==2) { g.rho[n]=rho_lb; g.ux[n]=g.bc_ux[n]; g.uy[n]=g.bc_uy[n]; g.uz[n]=g.bc_uz[n]; }
+    else if (g.type[n]==3) { g.rho[n]=rho_lb; g.ux[n]=g.uy[n]=g.uz[n]=0; }
+    // type 4 (open): do nothing — fields from zero-gradient streaming
   }
 }
 

@@ -36,6 +36,11 @@ static constexpr double w[9] = {
 1.0/36.0, 1.0/36.0, 1.0/36.0, 1.0/36.0
 };
 static constexpr int opp[9] = { 0, 2,1, 4,3, 6,5, 8,7 };
+// reflect[d][q]: index with e[q][d] sign-flipped (for free-slip)
+static constexpr int reflect[2][9] = {
+  {0, 2,1, 3,4, 8,7, 6,5},   // d=0 (x-normal)
+  {0, 1,2, 4,3, 7,8, 5,6}    // d=1 (y-normal)
+};
 };
 struct D3Q19 {
 static constexpr int D = 3;
@@ -61,6 +66,12 @@ static constexpr double w[19] = {
 static constexpr int opp[19] = {
 0, 2,1, 4,3, 6,5, 8,7, 10,9, 12,11, 14,13, 16,15, 18,17
 };
+// reflect[d][q]: index with e[q][d] sign-flipped (for free-slip)
+static constexpr int reflect[3][19] = {
+  {0, 2,1, 3,4, 5,6, 10,9,8,7, 14,13,12,11, 15,16,17,18},  // d=0 (x-normal)
+  {0, 1,2, 4,3, 5,6, 9,10,7,8, 11,12,13,14, 18,17,16,15},  // d=1 (y-normal)
+  {0, 1,2, 3,4, 6,5, 7,8,9,10, 13,14,11,12, 17,18,15,16}   // d=2 (z-normal)
+};
 };
 // ============================================================
 // Grid — local processor subdomain with ghost layers
@@ -83,6 +94,7 @@ std::vector<double> f, f_buf;
 std::vector<double> rho, ux, uy, uz;
 std::vector<double> fx, fy, fz;
 std::vector<int> type;
+std::vector<int> wall_dim;   // -1=fluid, 0/1/2=wall normal direction
 std::vector<double> bc_ux, bc_uy, bc_uz;
 // Diagnostic: number of density clamps in last compute_macroscopic call
 int rho_clamp_count;
@@ -106,6 +118,7 @@ rho.assign(ntotal, 1.0);
 ux.assign(ntotal, 0.0);  uy.assign(ntotal, 0.0);  uz.assign(ntotal, 0.0);
 fx.assign(ntotal, 0.0);  fy.assign(ntotal, 0.0);  fz.assign(ntotal, 0.0);
 type.assign(ntotal, 0);
+wall_dim.assign(ntotal, -1);
 bc_ux.assign(ntotal, 0.0);  bc_uy.assign(ntotal, 0.0);  bc_uz.assign(ntotal, 0.0);
 }
 inline int idx(int i, int j, int k = 0) const {
