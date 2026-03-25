@@ -83,6 +83,7 @@ public:
     constexpr int Q = Lattice::Q;
     constexpr double cs2 = Lattice::cs2;
     const int gx = grid.gx, gy = grid.gy, gz = grid.gz;
+    const double rho_floor = std::max(Constants::RHO_CLAMP_FRAC * rho0, Constants::RHO_MIN);
     const int klo = (Lattice::D == 3) ? 1 : 0;
     const int khi = (Lattice::D == 3) ? (gz - 2) : 0;
 
@@ -114,7 +115,17 @@ public:
                               + Lattice::e[q][2]*grid.bc_uz[sn];
               const double rho_floor = std::max(Constants::RHO_CLAMP_FRAC * rho0, Constants::RHO_MIN);
               const double rw = std::max(grid.rho[n], rho_floor);
-              grid.fi_buf(q, n) = grid.fi(qo, n) + 2.0*Lattice::w[qo]*rw*eu/cs2;
+              
+              grid.fi_buf(q, n) = grid.fi(qo, n) + 2.0*Lattice::w[qo]*rw*eu/cs2;              
+            } else if (st == 3) {
+              // Free-slip: specular reflection (flip wall-normal component only)
+              const int qr = Lattice::reflect[grid.wall_dim[sn]][q];
+              grid.fi_buf(q, n) = grid.fi(qr, n);
+            } else if (st == 4) {
+              // Open boundary: zero-gradient extrapolation.
+              // Unknown incoming population copied from current interior node.
+              // Lets momentum leave the domain (not conserved).
+              grid.fi_buf(q, n) = grid.fi(q, n);
             }
           }
         }

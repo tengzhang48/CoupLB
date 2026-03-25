@@ -18,6 +18,7 @@ constexpr double D2Q9::cs2;
 constexpr int    D2Q9::e[9][3];
 constexpr double D2Q9::w[9];
 constexpr int    D2Q9::opp[9];
+constexpr int    D2Q9::reflect[2][9];
 
 constexpr int    D3Q19::D;
 constexpr int    D3Q19::Q;
@@ -25,6 +26,7 @@ constexpr double D3Q19::cs2;
 constexpr int    D3Q19::e[19][3];
 constexpr double D3Q19::w[19];
 constexpr int    D3Q19::opp[19];
+constexpr int    D3Q19::reflect[3][19];
 
 } // namespace CoupLB
 } // namespace LAMMPS_NS
