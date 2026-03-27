@@ -392,14 +392,17 @@ void FixCoupLB::setup(int vflag)
     if (need_macro) grid3d->compute_macroscopic(false);
     if (output_every > 0) {
       if (comm->me == 0) {
-        const char* kn = ibm_kernel==CoupLB::DeltaKernel::ROMA ? "roma" : "peskin4";
-        FILE* fp = fopen(output_file.c_str(), "w");
-        if (fp) {
-          fprintf(fp,"# H=Ny=%d tau=%.6f nu=%.4e nu_lb=%.6f rho=%.4f kernel=%s\n",Ny,tau,nu,nu_lb,rho,kn);
-          fprintf(fp,"# CoupLB velocity profile\n# Columns: step j y rho ux uy\n#\n");
-          fclose(fp);
+          const char* kn = ibm_kernel==CoupLB::DeltaKernel::ROMA ? "roma" : "peskin4";
+          const char* mode = (update->ntimestep == 0) ? "w" : "a";
+          FILE* fp = fopen(output_file.c_str(), mode);
+          if (fp) {
+              if (update->ntimestep == 0) {
+                  fprintf(fp,"# H=Ny=%d tau=%.6f nu=%.4e nu_lb=%.6f rho=%.4f kernel=%s\n",Ny,tau,nu,nu_lb,rho,kn);
+                  fprintf(fp,"# CoupLB velocity profile\n# Columns: step j y rho ux uy\n#\n");
+              }
+              fclose(fp);
+          }
         }
-      }
       write_profile(*grid3d, update->ntimestep);
     }
     if (vtk_every > 0) {
@@ -412,10 +415,13 @@ void FixCoupLB::setup(int vflag)
     if (output_every > 0) {
       if (comm->me == 0) {
         const char* kn = ibm_kernel==CoupLB::DeltaKernel::ROMA ? "roma" : "peskin4";
-        FILE* fp = fopen(output_file.c_str(), "w");
+        const char* mode = (update->ntimestep == 0) ? "w" : "a";
+        FILE* fp = fopen(output_file.c_str(), mode);
         if (fp) {
-          fprintf(fp,"# H=Ny=%d tau=%.6f nu=%.4e nu_lb=%.6f rho=%.4f kernel=%s\n",Ny,tau,nu,nu_lb,rho,kn);
-          fprintf(fp,"# CoupLB velocity profile\n# Columns: step j y rho ux uy\n#\n");
+          if (update->ntimestep == 0) {
+            fprintf(fp,"# H=Ny=%d tau=%.6f nu=%.4e nu_lb=%.6f rho=%.4f kernel=%s\n",Ny,tau,nu,nu_lb,rho,kn);
+            fprintf(fp,"# CoupLB velocity profile\n# Columns: step j y rho ux uy\n#\n");
+          }
           fclose(fp);
         }
       }
@@ -675,7 +681,7 @@ void FixCoupLB::write_profile(CoupLB::Grid<L>& g, bigint step)
   auto write_data = [&](FILE* fp, int ny_tot, const double* ux_d, const double* uy_d, const double* rho_d, int yo) {
     fprintf(fp,"# step = %ld\n",(long)step);
     for(int j=0;j<ny_tot;j++)
-      fprintf(fp,"%ld %d %.1f %.8f %.10e %.10e\n",(long)step,j,(double)(yo+j)*dx,rho*rho_d[j],vel_scale*ux_d[j],vel_scale*uy_d[j]);
+    fprintf(fp,"%ld %d %.6f %.8f %.10e %.10e\n",(long)step,j,domain_lo[1]+(double)(yo+j)*dx,rho*rho_d[j],vel_scale*ux_d[j],vel_scale*uy_d[j]);
     fprintf(fp,"\n");
   };
 
