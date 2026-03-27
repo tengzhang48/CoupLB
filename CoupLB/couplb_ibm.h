@@ -78,7 +78,10 @@ public:
           else if (nt==1) { ws+=d; }
           else if (nt==2) { ui+=g.bc_ux[n]*d; vi+=g.bc_uy[n]*d; wi+=g.bc_uz[n]*d; ws+=d; }
           else if (nt==3) { ws+=d; }
-          else if (nt==4) { ui+=g.ux[n]*d; vi+=g.uy[n]*d; wi+=g.uz[n]*d; ws+=d; }
+          else if (nt==4) {
+            // Open boundary node: do not use potentially stale ghost velocities
+            // in IBM interpolation. Treat as non-contributing.
+          }
         }
       }
     }
