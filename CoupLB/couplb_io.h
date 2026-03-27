@@ -38,7 +38,8 @@ public:
   static void write_vtk(const Grid<Lattice>& grid, MPI_Comm comm,
                         long step, const std::string& prefix,
                         const double domain_lo[3], double dx_phys,
-                        double vel_scale = 1.0, double force_scale = 1.0)
+                        double vel_scale = 1.0, double force_scale = 1.0,
+                        double rho_scale = 1.0)
   {
     int rank, nprocs;
     MPI_Comm_rank(comm, &rank);
@@ -203,9 +204,9 @@ public:
     };
 
     // Stream fields one at a time — peak memory is only ~2×ntot doubles
-    const double vs = vel_scale, fs = force_scale;
+    const double vs = vel_scale, fs = force_scale, rs = rho_scale;
 
-    write_scalar("rho", [&](int n) { return grid.rho[n]; });
+    write_scalar("rho", [&](int n) { return grid.rho[n] * rs; });
 
     write_vector("velocity_phys",
       [&](int n) { return grid.ux[n] * vs; },

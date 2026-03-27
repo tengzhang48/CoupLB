@@ -403,7 +403,7 @@ void FixCoupLB::setup(int vflag)
       write_profile(*grid3d, update->ntimestep);
     }
     if (vtk_every > 0) {
-      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale);
+      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
       vtk_steps.push_back(step);
       if (comm->me == 0) CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
     }
@@ -422,7 +422,7 @@ void FixCoupLB::setup(int vflag)
       write_profile(*grid2d, update->ntimestep);
     }
     if (vtk_every > 0) {
-      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale);
+      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
       vtk_steps.push_back(step);
       if (comm->me == 0) CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
     }
@@ -642,7 +642,7 @@ void FixCoupLB::end_of_step()
     if (chk) check_stability_precomputed(*grid3d);
     if (out) write_profile(*grid3d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale);
+      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
       vtk_steps.push_back((long)step);
       if (comm->me==0) CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
     }
@@ -652,7 +652,7 @@ void FixCoupLB::end_of_step()
     if (chk) check_stability_precomputed(*grid2d);
     if (out) write_profile(*grid2d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale);
+      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
       vtk_steps.push_back((long)step);
       if (comm->me==0) CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
     }
