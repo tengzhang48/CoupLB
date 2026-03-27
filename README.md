@@ -243,7 +243,7 @@ Fields written:
 
 | Field | Components | Units |
 |:------|:-----------|:------|
-| `rho` | 1 (scalar) | Lattice units |
+| `rho` | 1 (scalar) | LAMMPS physical units (density `rho`, scaled by `rho_scale`) |
 | `velocity_phys` | 3 (vector) | LAMMPS physical units |
 | `force_phys` | 3 (vector) | LAMMPS physical units |
 | `type` | 1 (scalar) | 0 = fluid, 1 = no-slip wall, 2 = moving wall, 3 = free-slip, 4 = open |
