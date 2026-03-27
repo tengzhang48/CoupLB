@@ -250,7 +250,7 @@ Fields written:
 
 ### ASCII Profiles
 
-When `output N file` is enabled, CoupLB writes y-averaged profiles (rho, ux, uy) at each y-index, useful for validating Poiseuille and Couette flows. Columns: `step j y_lattice rho ux uy`. Velocity is in lattice units.
+When `output N file` is enabled, CoupLB writes y-averaged profiles (rho, ux, uy) at each y-index, useful for validating Poiseuille and Couette flows. Columns: `step j y rho ux uy`, where `y` is the physical y-coordinate in LAMMPS length units, `rho` is the physical density (lattice density scaled by `rho`), and `ux`, `uy` are velocities in LAMMPS physical units (lattice velocity scaled by `vel_scale`).
 
 ### Log Diagnostics
 
