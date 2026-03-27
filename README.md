@@ -468,3 +468,10 @@ run 100000
 - **No adaptive mesh refinement.**
 - **Checkpoint portability:** Checkpoints are tied to the same processor count and decomposition. Cannot restart on a different number of ranks.
 - **VTK gathering:** All VTK data is gathered to rank 0 and written as ASCII. This limits scalability for very large grids.
+
+## TODO
+
+- [ ] Add integration tests for `md_per_lb`, `xi_ibm`, and variable gravity (`v_varname`) keywords
+- [ ] Handle edge/corner nodes for mixed-wall configurations (e.g., free-slip on one axis + no-slip on another)
+- [ ] Early exit on VTK file open failure (broadcast I/O status to all ranks before gather)
+- [ ] Re-add `nsub` (multiple LBM per MD) if applications require it
