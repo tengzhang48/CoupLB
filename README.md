@@ -140,7 +140,7 @@ where D is the spatial dimension (2 or 3).
 
 ### VTK Output Units
 
-VTK files write fields in **LAMMPS physical units**, scaled by `vel_scale` and `force_scale` respectively. Density (`rho`) is written in lattice units (should remain close to `rho0`).
+VTK files write all fields in **LAMMPS physical units**: velocity and force are scaled by `vel_scale` and `force_scale` respectively, and density is scaled by `rho0`.
 
 ---
 
@@ -448,7 +448,7 @@ run 100000
 ### Accuracy
 
 - **Grid resolution:** For IBM-coupled bodies, diameter/dx ≥ 10 is recommended.
-- **IBM delta kernel normalization:** The interpolation and spreading functions normalize by the sum of delta weights over fluid nodes only, ensuring correct behavior near walls.
+- **IBM delta kernel normalization:** Interpolation normalizes by delta weights over all node types (fluid, wall, open), with each type contributing its appropriate velocity. Spreading normalizes and deposits forces onto fluid nodes only.
 - **Sub-stepping momentum conservation:** With `md_per_lb > 1`, the grid reaction force is scaled by 1/(N × force\_scale) so that the total impulse on the fluid over one LBM interval exactly balances the total impulse on the particles.
 - **xi\_ibm tuning:** For thin structures in strongly driven flows, values well below 1.0 (e.g. 0.01–0.1) create effectively one-way coupling that may be sufficient and more stable. The momentum-conserving version (xi\_ibm = 1/md\_per\_lb) gives proper two-way coupling but requires careful force scaling.
 
@@ -464,7 +464,7 @@ run 100000
 
 - **No turbulence models:** BGK collision only. For high-Re flows, consider MRT or entropic stabilization (not implemented).
 - **Single-pass IBM forcing:** No iterative correction for no-slip enforcement. Expect O(10%) velocity errors near immersed boundaries with coarse marker spacing.
-- **Fixed Lagrangian volume:** `dv_lag = 1.0` is hardcoded in the IBM spread function. For resolved particles, this should match the surface element area.
+- **Fixed Lagrangian volume:** The IBM spread function uses `dv = dx^D` for all markers. For resolved particles where markers represent surface elements of varying area, this may introduce force distribution errors.
 - **No adaptive mesh refinement.**
 - **Checkpoint portability:** Checkpoints are tied to the same processor count and decomposition. Cannot restart on a different number of ranks.
 - **VTK gathering:** All VTK data is gathered to rank 0 and written as ASCII. This limits scalability for very large grids.
