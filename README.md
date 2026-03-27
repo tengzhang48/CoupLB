@@ -441,7 +441,7 @@ run 100000
 
 - **Relaxation time:** τ must be > 0.5. Values in [0.6, 1.5] give best accuracy. τ > 2.0 increases viscous damping of small features. CoupLB warns if τ < 0.505.
 - **Mach number:** Keep Ma = u\_max / cs < 0.3 for compressibility errors below ~10%. CoupLB warns at Ma > 0.3 and errors out at Ma > 0.5.
-- **Density:** Should remain close to rho0. CoupLB clamps negative densities to a floor value (max of 10% of rho0 or 1e-10) and reports the count of clamped nodes. Non-finite densities are also caught and clamped.
+- **Density:** Should remain close to rho0. CoupLB clamps densities below a small positive floor value (`RHO_MIN`) and reports the count of clamped nodes. Non-finite densities are also caught and clamped.
 - **Wall velocity Mach check:** CoupLB checks the wall velocity Mach number at initialization and errors if Ma > 0.5.
 - **Poiseuille Mach estimate:** For constant gravity with walls, CoupLB estimates the expected peak velocity u\_max = g\*H²/(8ν\*) and checks its Mach number at initialization.
 
