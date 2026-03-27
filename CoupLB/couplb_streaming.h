@@ -113,7 +113,6 @@ public:
               const double eu = Lattice::e[q][0]*grid.bc_ux[sn]
                               + Lattice::e[q][1]*grid.bc_uy[sn]
                               + Lattice::e[q][2]*grid.bc_uz[sn];
-              const double rho_floor = std::max(Constants::RHO_CLAMP_FRAC * rho0, Constants::RHO_MIN);
               const double rw = std::max(grid.rho[n], rho_floor);
               
               grid.fi_buf(q, n) = grid.fi(qo, n) + 2.0*Lattice::w[qo]*rw*eu/cs2;              

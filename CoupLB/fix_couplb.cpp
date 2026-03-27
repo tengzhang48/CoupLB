@@ -280,8 +280,8 @@ void FixCoupLB::init()
     fprintf(screen,"CoupLB: dx=%.4e dt_LBM=%.4e vel_scale=%.4e force_scale=%.4e\n", dx,dt_LBM,vel_scale,force_scale);
     fprintf(screen,"CoupLB: kernel=%s xi_ibm=%.4f\n", ibm_kernel==CoupLB::DeltaKernel::ROMA?"roma":"peskin4", xi_ibm);
     if (md_per_lb>1)
-      fprintf(screen,"CoupLB: md_per_lb=%d (dt_LBM = %d x dt_MD = %.4e)\n",
-              md_per_lb, md_per_lb, dt_LBM);
+      fprintf(screen,"CoupLB: md_per_lb=%d (dt_LBM = %.4e, dt_MD = %.4e)\n",
+              md_per_lb, dt_LBM, update->dt);
     if (gxstyle==EQUAL_G || gystyle==EQUAL_G || gzstyle==EQUAL_G) {
       fprintf(screen,"CoupLB: gravity (variable): (%s, %s, %s)\n",
               gxstr ? gxstr : "const", gystr ? gystr : "const", gzstr ? gzstr : "const");
