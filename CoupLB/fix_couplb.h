@@ -15,6 +15,7 @@ FixStyle(couplb,FixCoupLB);
 #include "couplb_io.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace LAMMPS_NS {
 
@@ -29,13 +30,31 @@ public:
   void end_of_step() override;
 
 private:
+  enum { NONE_G, CONSTANT_G, EQUAL_G };
+
   int Nx, Ny, Nz;
-  double dx, tau, rho0, nu;
-  int nsub;
-  double dx_phys, dt_lbm, force_scale, vel_scale;
+  double dx, inv_dx;
+  double nu;
+  double rho;
+  double nu_lb;
+  static constexpr double dx_lb = 1.0;
+  static constexpr double rho_lb = 1.0;
+  double tau;
+  int md_per_lb;
+  int md_sub_count;
+  double xi_ibm;
+
+  double dt_LBM;
+  double force_scale;
+  double vel_scale;
+
   double gx_ext, gy_ext, gz_ext;
-  int wall_ylo, wall_yhi, wall_zlo, wall_zhi;
+  char *gxstr, *gystr, *gzstr;
+  int gxvar, gyvar, gzvar;
+  int gxstyle, gystyle, gzstyle;
+
   double wall_vel[3];
+  int wall_xlo, wall_xhi, wall_ylo, wall_yhi, wall_zlo, wall_zhi;
   double domain_lo[3], domain_hi[3];
 
   int output_every;
@@ -64,23 +83,26 @@ private:
 
   std::unique_ptr<CoupLB::Grid<CoupLB::D3Q19>>      grid3d;
   std::unique_ptr<CoupLB::BGK<CoupLB::D3Q19>>       bgk3d;
-  std::unique_ptr<CoupLB::Streaming<CoupLB::D3Q19>>  stream3d;
+  std::unique_ptr<CoupLB::Streaming<CoupLB::D3Q19>> stream3d;
 
   std::unique_ptr<CoupLB::Grid<CoupLB::D2Q9>>       grid2d;
   std::unique_ptr<CoupLB::BGK<CoupLB::D2Q9>>        bgk2d;
-  std::unique_ptr<CoupLB::Streaming<CoupLB::D2Q9>>   stream2d;
+  std::unique_ptr<CoupLB::Streaming<CoupLB::D2Q9>>  stream2d;
 
   MPI_Comm ycomm;
   bool ycomm_valid;
 
+  bool ibm_has_particles;
+
   void setup_grid();
-  void setup_boundaries();
+  void setup_boundaries(const double wv_lb[3]);
   void setup_ycomm();
   void lbm_step();
-  void ibm_coupling();
+  void update_gravity_variables();
+  void ibm_sub_coupling();
 
   template <typename L> void do_lbm_step(CoupLB::Grid<L>&, CoupLB::BGK<L>&, CoupLB::Streaming<L>&);
-  template <typename L> void do_ibm_coupling(CoupLB::Grid<L>&, CoupLB::Streaming<L>&);
+  template <typename L> void do_ibm_sub_coupling(CoupLB::Grid<L>&, CoupLB::Streaming<L>&, bool first);
   template <typename L> void apply_external_force(CoupLB::Grid<L>&);
   template <typename L> void enforce_wall_ghost_fields(CoupLB::Grid<L>&);
   template <typename L> void check_stability(CoupLB::Grid<L>&);
@@ -90,5 +112,5 @@ private:
 
 } // namespace LAMMPS_NS
 
-#endif // FIX_COUPLB_H
-#endif // FIX_CLASS
+#endif
+#endif

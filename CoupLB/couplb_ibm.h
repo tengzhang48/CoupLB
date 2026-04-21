@@ -45,22 +45,22 @@ public:
   }
 
   // Convert physical coordinates to ghost-inclusive local grid indices.
-  // dx_phys is the PHYSICAL grid spacing (not lattice dx=1).
+  // inv_dx = 1.0/dx_phys, precomputed to avoid per-particle divisions.
   static inline void phys_to_local(const Grid<Lattice>& g, double xp, double yp, double zp,
-                                   const double lo[3], double dx_phys,
+                                   const double lo[3], double inv_dx,
                                    double& lx, double& ly, double& lz) {
-    lx = (xp-lo[0])/dx_phys - g.offset[0] + 1.0;
-    ly = (yp-lo[1])/dx_phys - g.offset[1] + 1.0;
-    lz = (Lattice::D==3) ? ((zp-lo[2])/dx_phys - g.offset[2] + 1.0) : 0.0;
+    lx = (xp-lo[0])*inv_dx - g.offset[0] + 1.0;
+    ly = (yp-lo[1])*inv_dx - g.offset[1] + 1.0;
+    lz = (Lattice::D==3) ? ((zp-lo[2])*inv_dx - g.offset[2] + 1.0) : 0.0;
   }
 
   static std::array<double,3> interpolate(const Grid<Lattice>& g,
       double xp, double yp, double zp, const double lo[3],
-      double dx_phys,
+      double inv_dx,
       DeltaKernel kern = DeltaKernel::ROMA)
   {
     double lx, ly, lz;
-    phys_to_local(g, xp, yp, zp, lo, dx_phys, lx, ly, lz);
+    phys_to_local(g, xp, yp, zp, lo, inv_dx, lx, ly, lz);
     const int i0=(int)std::floor(lx), j0=(int)std::floor(ly);
     const int k0=(Lattice::D==3)?(int)std::floor(lz):0;
 
@@ -77,6 +77,11 @@ public:
           if (nt==0) { ui+=g.ux[n]*d; vi+=g.uy[n]*d; wi+=g.uz[n]*d; ws+=d; }
           else if (nt==1) { ws+=d; }
           else if (nt==2) { ui+=g.bc_ux[n]*d; vi+=g.bc_uy[n]*d; wi+=g.bc_uz[n]*d; ws+=d; }
+          else if (nt==3) { ws+=d; }
+          else if (nt==4) {
+            // Open boundary node: do not use potentially stale ghost velocities
+            // in IBM interpolation. Treat as non-contributing.
+          }
         }
       }
     }
@@ -86,11 +91,11 @@ public:
 
   static void spread(Grid<Lattice>& g, double xp, double yp, double zp,
       double fxl, double fyl, double fzl, double dvl, const double lo[3],
-      double dx_phys,
+      double inv_dx, double dx_phys,
       DeltaKernel kern = DeltaKernel::ROMA)
   {
     double lx, ly, lz;
-    phys_to_local(g, xp, yp, zp, lo, dx_phys, lx, ly, lz);
+    phys_to_local(g, xp, yp, zp, lo, inv_dx, lx, ly, lz);
     const int i0=(int)std::floor(lx), j0=(int)std::floor(ly);
     const int k0=(Lattice::D==3)?(int)std::floor(lz):0;
 

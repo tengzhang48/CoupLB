@@ -38,7 +38,8 @@ public:
   static void write_vtk(const Grid<Lattice>& grid, MPI_Comm comm,
                         long step, const std::string& prefix,
                         const double domain_lo[3], double dx_phys,
-                        double vel_scale = 1.0, double force_scale = 1.0)
+                        double vel_scale = 1.0, double force_scale = 1.0,
+                        double rho_scale = 1.0)
   {
     int rank, nprocs;
     MPI_Comm_rank(comm, &rank);
@@ -52,28 +53,6 @@ public:
     const int nlz = (Lattice::D == 3) ? grid.nz : 1;
     const int nlocal = nlx * nly * nlz;
 
-    // Pack local interior data into flat arrays
-    // Layout: x fastest, then y, then z (VTK ImageData default)
-    std::vector<double> l_rho(nlocal), l_ux(nlocal), l_uy(nlocal), l_uz(nlocal);
-    std::vector<double> l_fx(nlocal), l_fy(nlocal), l_fz(nlocal);
-    std::vector<int>    l_type(nlocal);
-
-    int c = 0;
-    for (int k = 0; k < nlz; k++)
-      for (int j = 0; j < nly; j++)
-        for (int i = 0; i < nlx; i++) {
-          const int n = grid.lidx(i, j, k);
-          l_rho[c]  = grid.rho[n];
-          l_ux[c]   = grid.ux[n] * vel_scale;
-          l_uy[c]   = grid.uy[n] * vel_scale;
-          l_uz[c]   = grid.uz[n] * vel_scale;
-          l_fx[c]   = grid.fx[n] * force_scale;
-          l_fy[c]   = grid.fy[n] * force_scale;
-          l_fz[c]   = grid.fz[n] * force_scale;
-          l_type[c] = grid.type[n];
-          c++;
-        }
-
     // Gather metadata: each rank sends (ox, oy, oz, nlx, nly, nlz)
     int local_info[6] = {grid.offset[0], grid.offset[1],
                          (Lattice::D == 3) ? grid.offset[2] : 0,
@@ -81,127 +60,176 @@ public:
     std::vector<int> all_info(nprocs * 6);
     MPI_Gather(local_info, 6, MPI_INT, all_info.data(), 6, MPI_INT, 0, comm);
 
-    // Gather local counts for variable-size Gatherv
+    // Gather counts for Gatherv
     std::vector<int> counts(nprocs), displs(nprocs);
     MPI_Gather(&nlocal, 1, MPI_INT, counts.data(), 1, MPI_INT, 0, comm);
 
+    int total_gathered = 0;
     if (rank == 0) {
       displs[0] = 0;
       for (int r = 1; r < nprocs; r++)
         displs[r] = displs[r-1] + counts[r-1];
+      total_gathered = displs[nprocs-1] + counts[nprocs-1];
     }
 
-    // Total gathered size (only meaningful on rank 0)
-    int total_gathered = 0;
+    // Rank 0 opens file and writes header
+    FILE* fp = nullptr;
     if (rank == 0) {
-      for (int r = 0; r < nprocs; r++) total_gathered += counts[r];
-    }
-
-    // Gather all fields to rank 0
-    std::vector<double> g_rho, g_ux, g_uy, g_uz, g_fx, g_fy, g_fz;
-    std::vector<int> g_type;
-    if (rank == 0) {
-      g_rho.resize(total_gathered);
-      g_ux.resize(total_gathered);  g_uy.resize(total_gathered);  g_uz.resize(total_gathered);
-      g_fx.resize(total_gathered);  g_fy.resize(total_gathered);  g_fz.resize(total_gathered);
-      g_type.resize(total_gathered);
-    }
-
-    MPI_Gatherv(l_rho.data(), nlocal, MPI_DOUBLE, g_rho.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_ux.data(),  nlocal, MPI_DOUBLE, g_ux.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_uy.data(),  nlocal, MPI_DOUBLE, g_uy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_uz.data(),  nlocal, MPI_DOUBLE, g_uz.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_fx.data(),  nlocal, MPI_DOUBLE, g_fx.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_fy.data(),  nlocal, MPI_DOUBLE, g_fy.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_fz.data(),  nlocal, MPI_DOUBLE, g_fz.data(),  counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
-    MPI_Gatherv(l_type.data(), nlocal, MPI_INT,   g_type.data(), counts.data(), displs.data(), MPI_INT,    0, comm);
-
-    // Rank 0: reassemble gathered chunks into global arrays and write
-    if (rank == 0) {
-      std::vector<double> rho(ntot), ux(ntot), uy(ntot), uz(ntot);
-      std::vector<double> fx(ntot), fy(ntot), fz(ntot);
-      std::vector<int>    type(ntot);
-
-      for (int r = 0; r < nprocs; r++) {
-        const int ox = all_info[r*6+0], oy = all_info[r*6+1], oz = all_info[r*6+2];
-        const int rnx = all_info[r*6+3], rny = all_info[r*6+4], rnz = all_info[r*6+5];
-        const int base = displs[r];
-        int idx = 0;
-        for (int k = 0; k < rnz; k++)
-          for (int j = 0; j < rny; j++)
-            for (int i = 0; i < rnx; i++) {
-              const int gi = ox + i, gj = oy + j, gk = oz + k;
-              const size_t gn = (size_t)gi + (size_t)Nx * ((size_t)gj + (size_t)Ny * gk);
-              rho[gn]  = g_rho[base + idx];
-              ux[gn]   = g_ux[base + idx];
-              uy[gn]   = g_uy[base + idx];
-              uz[gn]   = g_uz[base + idx];
-              fx[gn]   = g_fx[base + idx];
-              fy[gn]   = g_fy[base + idx];
-              fz[gn]   = g_fz[base + idx];
-              type[gn] = g_type[base + idx];
-              idx++;
-            }
-      }
-
-      // Free gathered buffers
-      g_rho.clear(); g_ux.clear(); g_uy.clear(); g_uz.clear();
-      g_fx.clear();  g_fy.clear();  g_fz.clear();  g_type.clear();
-
-      // Write single .vti file
       char fname[512];
       snprintf(fname, sizeof(fname), "%s_%06ld.vti", prefix.c_str(), step);
-
-      FILE* fp = fopen(fname, "w");
+      fp = fopen(fname, "w");
       if (!fp) {
         fprintf(stderr, "CoupLB IO: cannot open %s\n", fname);
-        return;
+      } else {
+        fprintf(fp, "<?xml version=\"1.0\"?>\n");
+        fprintf(fp, "<VTKFile type=\"ImageData\" version=\"1.0\" "
+                    "byte_order=\"LittleEndian\">\n");
+        fprintf(fp, "  <ImageData WholeExtent=\"0 %d 0 %d 0 %d\" "
+                    "Origin=\"%.8e %.8e %.8e\" "
+                    "Spacing=\"%.8e %.8e %.8e\">\n",
+                Nx, Ny, Nz,
+                domain_lo[0], domain_lo[1], domain_lo[2],
+                dx_phys, dx_phys, dx_phys);
+        fprintf(fp, "    <Piece Extent=\"0 %d 0 %d 0 %d\">\n", Nx, Ny, Nz);
+        fprintf(fp, "      <CellData Scalars=\"rho\" Vectors=\"velocity_phys\">\n");
       }
+    }
 
-      fprintf(fp, "<?xml version=\"1.0\"?>\n");
-      fprintf(fp, "<VTKFile type=\"ImageData\" version=\"1.0\" "
-                  "byte_order=\"LittleEndian\">\n");
-      fprintf(fp, "  <ImageData WholeExtent=\"0 %d 0 %d 0 %d\" "
-                  "Origin=\"%.8e %.8e %.8e\" "
-                  "Spacing=\"%.8e %.8e %.8e\">\n",
-              Nx, Ny, Nz,
-              domain_lo[0], domain_lo[1], domain_lo[2],
-              dx_phys, dx_phys, dx_phys);
-      fprintf(fp, "    <Piece Extent=\"0 %d 0 %d 0 %d\">\n", Nx, Ny, Nz);
-      fprintf(fp, "      <CellData Scalars=\"rho\" Vectors=\"velocity_phys\">\n");
+    // Helper: gather one scalar field, reorder on rank 0, write, free
+    auto write_scalar = [&](const char* name, auto pack_fn) {
+      std::vector<double> lbuf(nlocal);
+      int c = 0;
+      for (int k = 0; k < nlz; k++)
+        for (int j = 0; j < nly; j++)
+          for (int i = 0; i < nlx; i++)
+            lbuf[c++] = pack_fn(grid.lidx(i, j, k));
 
-      // rho
-      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"rho\" format=\"ascii\">\n");
-      for (size_t n = 0; n < ntot; n++)
-        fprintf(fp, "%.8e\n", rho[n]);
-      fprintf(fp, "        </DataArray>\n");
+      std::vector<double> gbuf;
+      if (rank == 0) gbuf.resize(total_gathered);
+      MPI_Gatherv(lbuf.data(), nlocal, MPI_DOUBLE,
+                  gbuf.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
 
-      // velocity (physical units)
-      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"velocity_phys\" "
-                  "NumberOfComponents=\"3\" format=\"ascii\">\n");
-      for (size_t n = 0; n < ntot; n++)
-        fprintf(fp, "%.8e %.8e %.8e\n", ux[n], uy[n], uz[n]);
-      fprintf(fp, "        </DataArray>\n");
+      if (rank == 0 && fp) {
+        std::vector<double> field(ntot);
+        for (int r = 0; r < nprocs; r++) {
+          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
+          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          int idx = 0;
+          for (int kk=0; kk<rnz; kk++)
+            for (int jj=0; jj<rny; jj++)
+              for (int ii=0; ii<rnx; ii++) {
+                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+                field[gn] = gbuf[displs[r] + idx++];
+              }
+        }
+        fprintf(fp, "        <DataArray type=\"Float64\" Name=\"%s\" format=\"ascii\">\n", name);
+        for (size_t n = 0; n < ntot; n++) fprintf(fp, "%.8e\n", field[n]);
+        fprintf(fp, "        </DataArray>\n");
+      }
+      // gbuf and field freed here
+    };
 
-      // type
-      fprintf(fp, "        <DataArray type=\"Int32\" Name=\"type\" format=\"ascii\">\n");
-      for (size_t n = 0; n < ntot; n++)
-        fprintf(fp, "%d\n", type[n]);
-      fprintf(fp, "        </DataArray>\n");
+    // Helper: gather one vector field (3 components), reorder, write, free
+    auto write_vector = [&](const char* name, auto pack_x, auto pack_y, auto pack_z) {
+      std::vector<double> lx(nlocal), ly(nlocal), lz(nlocal);
+      int c = 0;
+      for (int k = 0; k < nlz; k++)
+        for (int j = 0; j < nly; j++)
+          for (int i = 0; i < nlx; i++) {
+            const int n = grid.lidx(i, j, k);
+            lx[c] = pack_x(n); ly[c] = pack_y(n); lz[c] = pack_z(n);
+            c++;
+          }
 
-      // force (physical units)
-      fprintf(fp, "        <DataArray type=\"Float64\" Name=\"force_phys\" "
-                  "NumberOfComponents=\"3\" format=\"ascii\">\n");
-      for (size_t n = 0; n < ntot; n++)
-        fprintf(fp, "%.8e %.8e %.8e\n", fx[n], fy[n], fz[n]);
-      fprintf(fp, "        </DataArray>\n");
+      // Gather each component
+      std::vector<double> gx, gy, gz;
+      if (rank == 0) { gx.resize(total_gathered); gy.resize(total_gathered); gz.resize(total_gathered); }
+      MPI_Gatherv(lx.data(), nlocal, MPI_DOUBLE, gx.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
+      MPI_Gatherv(ly.data(), nlocal, MPI_DOUBLE, gy.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
+      MPI_Gatherv(lz.data(), nlocal, MPI_DOUBLE, gz.data(), counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
 
+      if (rank == 0 && fp) {
+        std::vector<double> fx(ntot), fy(ntot), fz(ntot);
+        for (int r = 0; r < nprocs; r++) {
+          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
+          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          int idx = 0;
+          for (int kk=0; kk<rnz; kk++)
+            for (int jj=0; jj<rny; jj++)
+              for (int ii=0; ii<rnx; ii++) {
+                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+                fx[gn] = gx[displs[r]+idx]; fy[gn] = gy[displs[r]+idx]; fz[gn] = gz[displs[r]+idx];
+                idx++;
+              }
+        }
+        fprintf(fp, "        <DataArray type=\"Float64\" Name=\"%s\" "
+                    "NumberOfComponents=\"3\" format=\"ascii\">\n", name);
+        for (size_t n = 0; n < ntot; n++)
+          fprintf(fp, "%.8e %.8e %.8e\n", fx[n], fy[n], fz[n]);
+        fprintf(fp, "        </DataArray>\n");
+      }
+    };
+
+    // Helper: gather integer scalar field
+    auto write_int_scalar = [&](const char* name, auto pack_fn) {
+      std::vector<int> lbuf(nlocal);
+      int c = 0;
+      for (int k = 0; k < nlz; k++)
+        for (int j = 0; j < nly; j++)
+          for (int i = 0; i < nlx; i++)
+            lbuf[c++] = pack_fn(grid.lidx(i, j, k));
+
+      std::vector<int> gbuf;
+      if (rank == 0) gbuf.resize(total_gathered);
+      MPI_Gatherv(lbuf.data(), nlocal, MPI_INT,
+                  gbuf.data(), counts.data(), displs.data(), MPI_INT, 0, comm);
+
+      if (rank == 0 && fp) {
+        std::vector<int> field(ntot);
+        for (int r = 0; r < nprocs; r++) {
+          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
+          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          int idx = 0;
+          for (int kk=0; kk<rnz; kk++)
+            for (int jj=0; jj<rny; jj++)
+              for (int ii=0; ii<rnx; ii++) {
+                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+                field[gn] = gbuf[displs[r] + idx++];
+              }
+        }
+        fprintf(fp, "        <DataArray type=\"Int32\" Name=\"%s\" format=\"ascii\">\n", name);
+        for (size_t n = 0; n < ntot; n++) fprintf(fp, "%d\n", field[n]);
+        fprintf(fp, "        </DataArray>\n");
+      }
+    };
+
+    // Stream fields one at a time — peak memory is only ~2×ntot doubles
+    const double vs = vel_scale, fs = force_scale, rs = rho_scale;
+
+    write_scalar("rho", [&](int n) { return grid.rho[n] * rs; });
+
+    write_vector("velocity_phys",
+      [&](int n) { return grid.ux[n] * vs; },
+      [&](int n) { return grid.uy[n] * vs; },
+      [&](int n) { return grid.uz[n] * vs; });
+
+    write_int_scalar("type", [&](int n) { return grid.type[n]; });
+
+    write_vector("force_phys",
+      [&](int n) { return grid.fx[n] * fs; },
+      [&](int n) { return grid.fy[n] * fs; },
+      [&](int n) { return grid.fz[n] * fs; });
+
+    // Close file
+    if (rank == 0 && fp) {
       fprintf(fp, "      </CellData>\n");
       fprintf(fp, "    </Piece>\n");
       fprintf(fp, "  </ImageData>\n");
       fprintf(fp, "</VTKFile>\n");
       fclose(fp);
 
+      char fname[512];
+      snprintf(fname, sizeof(fname), "%s_%06ld.vti", prefix.c_str(), step);
       fprintf(stdout, "CoupLB: VTK written at step %ld -> %s\n", step, fname);
     }
   }

@@ -113,9 +113,18 @@ public:
               const double eu = Lattice::e[q][0]*grid.bc_ux[sn]
                               + Lattice::e[q][1]*grid.bc_uy[sn]
                               + Lattice::e[q][2]*grid.bc_uz[sn];
-              const double rho_floor = std::max(Constants::RHO_CLAMP_FRAC * rho0, Constants::RHO_MIN);
-              const double rw = std::max(grid.rho[n], rho_floor);  // Already prevents rw ≤ 0
+              const double rw = std::max(grid.rho[n], rho_floor);
+              
               grid.fi_buf(q, n) = grid.fi(qo, n) + 2.0*Lattice::w[qo]*rw*eu/cs2;              
+            } else if (st == 3) {
+              // Free-slip: specular reflection (flip wall-normal component only)
+              const int qr = Lattice::reflect[grid.wall_dim[sn]][q];
+              grid.fi_buf(q, n) = grid.fi(qr, n);
+            } else if (st == 4) {
+              // Open boundary: zero-gradient extrapolation.
+              // Unknown incoming population copied from current interior node.
+              // Lets momentum leave the domain (not conserved).
+              grid.fi_buf(q, n) = grid.fi(q, n);
             }
           }
         }
@@ -156,7 +165,7 @@ private:
     if (dim==0) { for(int k=0;k<gz;k++) for(int j=0;j<gy;j++) if(g.type[g.idx(pos,j,k)]==0) return false; }
     else if (dim==1) { for(int k=0;k<gz;k++) for(int i=0;i<gx;i++) if(g.type[g.idx(i,pos,k)]==0) return false; }
     else { for(int j=0;j<gy;j++) for(int i=0;i<gx;i++) if(g.type[g.idx(i,j,pos)]==0) return false; }
-    return false;
+    return true;
   }
 
   size_t face_size(const Grid<Lattice>& g, int d) const {
@@ -204,14 +213,14 @@ private:
     if (neigh[d][1]!=MPI_PROC_NULL && !wall_face[d][1]) unpack_face_vel(g,d,gh,vrecv_hi);
   }
 
-  // Reverse force exchange: ghost → interior (additive)
+  // Reverse force exchange: ghost --> interior (additive)
   void exchange_force_dim(Grid<Lattice>& g, int d) {
     const int ds=dim_ext(g,d), lf=1, hf=ds-2, gl=0, gh=ds-1;
 
     // Self-periodic: ghost forces accumulate onto opposite interior face
     if (is_self_periodic(d) && ds>=4) {
-      accum_face_force(g, d, gl, lf);   // ghost_lo → interior lo_face
-      accum_face_force(g, d, gh, hf);   // ghost_hi → interior hi_face
+      accum_face_force(g, d, gl, lf);   // ghost_lo --> interior lo_face
+      accum_face_force(g, d, gh, hf);   // ghost_hi --> interior hi_face
       return;
     }
     if (neigh[d][0]==MPI_PROC_NULL && neigh[d][1]==MPI_PROC_NULL) return;
@@ -255,7 +264,7 @@ private:
     iter2(g,d,s,t,[&](int sn,int dn){ g.rho[dn]=g.rho[sn]; g.ux[dn]=g.ux[sn]; g.uy[dn]=g.uy[sn]; g.uz[dn]=g.uz[sn]; });
   }
 
-  // Force helpers — reverse communication (ghost → interior, additive)
+  // Force helpers - reverse communication (ghost --> interior, additive)
   void pack_face_force(const Grid<Lattice>& g, int d, int p, std::vector<double>& b) const {
     size_t c=0; iter(g,d,p,[&](int n){ b[c++]=g.fx[n]; b[c++]=g.fy[n]; b[c++]=g.fz[n]; });
   }
