@@ -43,7 +43,8 @@ public:
                         long step, const std::string& prefix,
                         const double domain_lo[3], double dx_phys,
                         double vel_scale = 1.0, double force_scale = 1.0,
-                        double rho_scale = 1.0)
+                        double rho_scale = 1.0,
+                        const int* region = nullptr)
   {
     int rank, nprocs;
     MPI_Comm_rank(comm, &rank);
@@ -51,16 +52,34 @@ public:
 
     const int Nx = grid.Nx, Ny = grid.Ny;
     const int Nz = (Lattice::D == 3) ? grid.Nz : 1;
-    const size_t ntot = (size_t)Nx * Ny * Nz;
+
+    // Region bounds (default: full domain)
+    const int ilo = region ? region[0] : 0;
+    const int ihi = region ? region[1] : Nx;
+    const int jlo = region ? region[2] : 0;
+    const int jhi = region ? region[3] : Ny;
+    const int klo = region ? region[4] : 0;
+    const int khi = region ? region[5] : Nz;
+
+    const int Rx = ihi - ilo, Ry = jhi - jlo, Rz = khi - klo;
+    const size_t ntot = (size_t)Rx * Ry * Rz;
 
     const int nlx = grid.nx, nly = grid.ny;
     const int nlz = (Lattice::D == 3) ? grid.nz : 1;
-    const int nlocal = nlx * nly * nlz;
+    const int ox = grid.offset[0], oy = grid.offset[1];
+    const int oz = (Lattice::D == 3) ? grid.offset[2] : 0;
 
-    // Gather metadata: each rank sends (ox, oy, oz, nlx, nly, nlz)
-    int local_info[6] = {grid.offset[0], grid.offset[1],
-                         (Lattice::D == 3) ? grid.offset[2] : 0,
-                         nlx, nly, nlz};
+    // Local cells overlapping the region
+    const int li0 = std::max(0, ilo - ox), li1 = std::min(nlx, ihi - ox);
+    const int lj0 = std::max(0, jlo - oy), lj1 = std::min(nly, jhi - oy);
+    const int lk0 = std::max(0, klo - oz), lk1 = std::min(nlz, khi - oz);
+    const int rnx = std::max(0, li1 - li0);
+    const int rny = std::max(0, lj1 - lj0);
+    const int rnz = std::max(0, lk1 - lk0);
+    const int nlocal = rnx * rny * rnz;
+
+    // Gather metadata: each rank sends (global_ox, global_oy, global_oz, rnx, rny, rnz)
+    int local_info[6] = {ox + li0, oy + lj0, oz + lk0, rnx, rny, rnz};
     std::vector<int> all_info(nprocs * 6);
     MPI_Gather(local_info, 6, MPI_INT, all_info.data(), 6, MPI_INT, 0, comm);
 
@@ -85,16 +104,21 @@ public:
       if (!fp) {
         fprintf(stderr, "CoupLB IO: cannot open %s\n", fname);
       } else {
+        const double reg_lo[3] = {
+          domain_lo[0] + ilo * dx_phys,
+          domain_lo[1] + jlo * dx_phys,
+          domain_lo[2] + klo * dx_phys
+        };
         fprintf(fp, "<?xml version=\"1.0\"?>\n");
         fprintf(fp, "<VTKFile type=\"ImageData\" version=\"1.0\" "
                     "byte_order=\"LittleEndian\">\n");
         fprintf(fp, "  <ImageData WholeExtent=\"0 %d 0 %d 0 %d\" "
                     "Origin=\"%.8e %.8e %.8e\" "
                     "Spacing=\"%.8e %.8e %.8e\">\n",
-                Nx, Ny, Nz,
-                domain_lo[0], domain_lo[1], domain_lo[2],
+                Rx, Ry, Rz,
+                reg_lo[0], reg_lo[1], reg_lo[2],
                 dx_phys, dx_phys, dx_phys);
-        fprintf(fp, "    <Piece Extent=\"0 %d 0 %d 0 %d\">\n", Nx, Ny, Nz);
+        fprintf(fp, "    <Piece Extent=\"0 %d 0 %d 0 %d\">\n", Rx, Ry, Rz);
         fprintf(fp, "      <CellData Scalars=\"rho\" Vectors=\"velocity_phys\">\n");
       }
     }
@@ -103,9 +127,9 @@ public:
     auto write_scalar = [&](const char* name, auto pack_fn) {
       std::vector<double> lbuf(nlocal);
       int c = 0;
-      for (int k = 0; k < nlz; k++)
-        for (int j = 0; j < nly; j++)
-          for (int i = 0; i < nlx; i++)
+      for (int k = lk0; k < lk0 + rnz; k++)
+        for (int j = lj0; j < lj0 + rny; j++)
+          for (int i = li0; i < li0 + rnx; i++)
             lbuf[c++] = pack_fn(grid.lidx(i, j, k));
 
       std::vector<double> gbuf;
@@ -116,13 +140,15 @@ public:
       if (rank == 0 && fp) {
         std::vector<double> field(ntot);
         for (int r = 0; r < nprocs; r++) {
-          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
-          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          const int rox = all_info[r*6] - ilo;
+          const int roy = all_info[r*6+1] - jlo;
+          const int roz = all_info[r*6+2] - klo;
+          const int rnx_r=all_info[r*6+3], rny_r=all_info[r*6+4], rnz_r=all_info[r*6+5];
           int idx = 0;
-          for (int kk=0; kk<rnz; kk++)
-            for (int jj=0; jj<rny; jj++)
-              for (int ii=0; ii<rnx; ii++) {
-                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+          for (int kk=0; kk<rnz_r; kk++)
+            for (int jj=0; jj<rny_r; jj++)
+              for (int ii=0; ii<rnx_r; ii++) {
+                const size_t gn = (size_t)(rox+ii) + (size_t)Rx*((size_t)(roy+jj) + (size_t)Ry*(roz+kk));
                 field[gn] = gbuf[displs[r] + idx++];
               }
         }
@@ -130,16 +156,15 @@ public:
         for (size_t n = 0; n < ntot; n++) fprintf(fp, "%.8e\n", field[n]);
         fprintf(fp, "        </DataArray>\n");
       }
-      // gbuf and field freed here
     };
 
     // Helper: gather one vector field (3 components), reorder, write, free
     auto write_vector = [&](const char* name, auto pack_x, auto pack_y, auto pack_z) {
       std::vector<double> lx(nlocal), ly(nlocal), lz(nlocal);
       int c = 0;
-      for (int k = 0; k < nlz; k++)
-        for (int j = 0; j < nly; j++)
-          for (int i = 0; i < nlx; i++) {
+      for (int k = lk0; k < lk0 + rnz; k++)
+        for (int j = lj0; j < lj0 + rny; j++)
+          for (int i = li0; i < li0 + rnx; i++) {
             const int n = grid.lidx(i, j, k);
             lx[c] = pack_x(n); ly[c] = pack_y(n); lz[c] = pack_z(n);
             c++;
@@ -155,13 +180,15 @@ public:
       if (rank == 0 && fp) {
         std::vector<double> fx(ntot), fy(ntot), fz(ntot);
         for (int r = 0; r < nprocs; r++) {
-          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
-          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          const int rox = all_info[r*6] - ilo;
+          const int roy = all_info[r*6+1] - jlo;
+          const int roz = all_info[r*6+2] - klo;
+          const int rnx_r=all_info[r*6+3], rny_r=all_info[r*6+4], rnz_r=all_info[r*6+5];
           int idx = 0;
-          for (int kk=0; kk<rnz; kk++)
-            for (int jj=0; jj<rny; jj++)
-              for (int ii=0; ii<rnx; ii++) {
-                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+          for (int kk=0; kk<rnz_r; kk++)
+            for (int jj=0; jj<rny_r; jj++)
+              for (int ii=0; ii<rnx_r; ii++) {
+                const size_t gn = (size_t)(rox+ii) + (size_t)Rx*((size_t)(roy+jj) + (size_t)Ry*(roz+kk));
                 fx[gn] = gx[displs[r]+idx]; fy[gn] = gy[displs[r]+idx]; fz[gn] = gz[displs[r]+idx];
                 idx++;
               }
@@ -178,9 +205,9 @@ public:
     auto write_int_scalar = [&](const char* name, auto pack_fn) {
       std::vector<int> lbuf(nlocal);
       int c = 0;
-      for (int k = 0; k < nlz; k++)
-        for (int j = 0; j < nly; j++)
-          for (int i = 0; i < nlx; i++)
+      for (int k = lk0; k < lk0 + rnz; k++)
+        for (int j = lj0; j < lj0 + rny; j++)
+          for (int i = li0; i < li0 + rnx; i++)
             lbuf[c++] = pack_fn(grid.lidx(i, j, k));
 
       std::vector<int> gbuf;
@@ -191,13 +218,15 @@ public:
       if (rank == 0 && fp) {
         std::vector<int> field(ntot);
         for (int r = 0; r < nprocs; r++) {
-          const int ox=all_info[r*6], oy=all_info[r*6+1], oz=all_info[r*6+2];
-          const int rnx=all_info[r*6+3], rny=all_info[r*6+4], rnz=all_info[r*6+5];
+          const int rox = all_info[r*6] - ilo;
+          const int roy = all_info[r*6+1] - jlo;
+          const int roz = all_info[r*6+2] - klo;
+          const int rnx_r=all_info[r*6+3], rny_r=all_info[r*6+4], rnz_r=all_info[r*6+5];
           int idx = 0;
-          for (int kk=0; kk<rnz; kk++)
-            for (int jj=0; jj<rny; jj++)
-              for (int ii=0; ii<rnx; ii++) {
-                const size_t gn = (size_t)(ox+ii) + (size_t)Nx*((size_t)(oy+jj) + (size_t)Ny*(oz+kk));
+          for (int kk=0; kk<rnz_r; kk++)
+            for (int jj=0; jj<rny_r; jj++)
+              for (int ii=0; ii<rnx_r; ii++) {
+                const size_t gn = (size_t)(rox+ii) + (size_t)Rx*((size_t)(roy+jj) + (size_t)Ry*(roz+kk));
                 field[gn] = gbuf[displs[r] + idx++];
               }
         }
@@ -234,7 +263,8 @@ public:
 
       char fname[512];
       snprintf(fname, sizeof(fname), "%s_%06ld.vti", prefix.c_str(), step);
-      fprintf(stdout, "CoupLB: VTK written at step %ld -> %s\n", step, fname);
+      fprintf(stdout, "CoupLB: VTK written at step %ld -> %s (%dx%dx%d region)\n",
+              step, fname, Rx, Ry, Rz);
     }
   }
 
@@ -284,7 +314,9 @@ public:
                              const std::string& prefix,
                              const std::vector<std::string>& attrs,
                              int nlocal, const int* mask, int groupbit,
-                             Atom* atom, Error* error)
+                             Atom* atom, Error* error,
+                             const double* region_lo = nullptr,
+                             const double* region_hi = nullptr)
   {
     int rank, nprocs;
     MPI_Comm_rank(comm, &rank);
@@ -292,6 +324,18 @@ public:
 
     if (!atom) error->all(FLERR, "CoupLB IO: write_solid_vtk called with null atom pointer");
     if (!mask) error->all(FLERR, "CoupLB IO: write_solid_vtk called with null mask pointer");
+
+    // Helper: check if atom i is inside region
+    auto in_region = [&](int i) -> bool {
+      if (!region_lo || !region_hi) return true;
+      const double xi = atom->x[i][0];
+      const double yi = atom->x[i][1];
+      const double zi = atom->x[i][2];
+      if (xi < region_lo[0] || xi >= region_hi[0]) return false;
+      if (yi < region_lo[1] || yi >= region_hi[1]) return false;
+      if (zi < region_lo[2] || zi >= region_hi[2]) return false;
+      return true;
+    };
 
     // --- Attribute registry ---
     struct AttrInfo {
@@ -371,10 +415,6 @@ public:
     };
 
     // --- Resolve requested attributes (hard error on unknown/unavailable) ---
-    struct Requested {
-      const AttrInfo* info;
-    };
-
     std::vector<const AttrInfo*> requested;
     requested.reserve(attrs.size());
 
@@ -439,10 +479,13 @@ public:
       }
     }
 
-    // --- Count local atoms in group ---
+    // --- Count local atoms in group AND region ---
     int ngroup = 0;
-    for (int i = 0; i < nlocal; i++)
-      if (mask[i] & groupbit) ngroup++;
+    for (int i = 0; i < nlocal; i++) {
+      if (!(mask[i] & groupbit)) continue;
+      if (!in_region(i)) continue;
+      ngroup++;
+    }
 
     // --- Pack: x,y,z always + requested fields ---
     int doubles_per_atom = 3;
@@ -454,6 +497,7 @@ public:
     int c = 0;
     for (int i = 0; i < nlocal; i++) {
       if (!(mask[i] & groupbit)) continue;
+      if (!in_region(i)) continue;
 
       lbuf[c++] = atom->x[i][0];
       lbuf[c++] = atom->x[i][1];
@@ -490,7 +534,7 @@ public:
     if (rank != 0) return;
 
     if (total % doubles_per_atom != 0)
-      error->all(FLERR, "CoupLB IO: solid VTK gather size not divisible by record size");
+      error->one(FLERR, "CoupLB IO: solid VTK gather size not divisible by record size");
 
     const int ntotal = total / doubles_per_atom;
 
@@ -498,7 +542,7 @@ public:
     snprintf(fname, sizeof(fname), "%s_solid_%06ld.vtp", prefix.c_str(), step);
     FILE* fp = fopen(fname, "w");
     if (!fp)
-      error->all(FLERR, "CoupLB IO: cannot open {}", fname);
+      error->one(FLERR, "CoupLB IO: cannot open {}", fname);
 
     fprintf(fp, "<?xml version=\"1.0\"?>\n");
     fprintf(fp, "<VTKFile type=\"PolyData\" version=\"1.0\" byte_order=\"LittleEndian\">\n");
