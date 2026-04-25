@@ -24,7 +24,7 @@ static bool is_couplb_keyword(const char* s)
   static const char* keywords[] = {
     "md_per_lb", "xi_ibm", "gravity",
     "wall_x", "wall_y", "wall_z", "wall_vel",
-    "dx", "output", "check_every", "kernel",
+    "output", "check_every", "kernel",
     "vtk", "vtk_solid",
     "checkpoint", "restart",
     nullptr
@@ -57,7 +57,6 @@ static bool is_couplb_keyword(const char* s)
      wall_y lo hi        y-boundary: 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
      wall_z lo hi        z-boundary (3D only): 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
      wall_vel vx vy vz   velocity for type-2 walls
-     dx value            grid spacing (default Lx/Nx)
      output N file       write velocity profile every N steps
      check_every N       stability check frequency
      kernel {roma|peskin4}  IBM delta function (default roma)
@@ -145,9 +144,6 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       wall_vel[1]=std::stod(arg[iarg+2]);
       wall_vel[2]=std::stod(arg[iarg+3]);
       iarg+=4;
-    } else if (strcmp(arg[iarg],"dx")==0) {
-      if (iarg+2>narg) error->all(FLERR,"fix couplb dx: need 1 value");
-      dx=std::stod(arg[iarg+1]); iarg+=2;
     } else if (strcmp(arg[iarg],"output")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb output: need 2 values");
       output_every=std::stoi(arg[iarg+1]); output_file=arg[iarg+2]; iarg+=3;
@@ -233,7 +229,26 @@ void FixCoupLB::init()
   }
 
   for (int d=0;d<3;d++) { domain_lo[d]=domain->boxlo[d]; domain_hi[d]=domain->boxhi[d]; }
-  if (dx<=0) dx = (domain_hi[0]-domain_lo[0]) / Nx;
+
+  // Compute grid spacing from domain bounds and grid dimensions.
+  // LBM requires cubic cells (dx = dy = dz).
+  const double dx_x = (domain_hi[0] - domain_lo[0]) / Nx;
+  const double dx_y = (domain_hi[1] - domain_lo[1]) / Ny;
+
+  if (std::fabs(dx_x - dx_y) > 1e-10 * dx_x)
+    error->all(FLERR, "fix couplb: non-cubic grid cells "
+               "(Lx/Nx={:.6e} != Ly/Ny={:.6e}). "
+               "Adjust Nx, Ny, or domain size.", dx_x, dx_y);
+
+  if (is3d) {
+    const double dx_z = (domain_hi[2] - domain_lo[2]) / Nz;
+    if (std::fabs(dx_x - dx_z) > 1e-10 * dx_x)
+      error->all(FLERR, "fix couplb: non-cubic grid cells "
+                 "(Lx/Nx={:.6e} != Lz/Nz={:.6e}). "
+                 "Adjust Nx, Nz, or domain size.", dx_x, dx_z);
+  }
+
+  dx = dx_x;
   inv_dx = 1.0 / dx;
 
   dt_LBM = update->dt * md_per_lb;

@@ -35,7 +35,6 @@ fix             body sphere rigid/nve single
 variable        g_comp equal -${F_total}/(${rho0}*v_L*v_L*v_L)
 
 fix             flow sphere couplb ${Nc} ${Nc} ${Nc} ${nu_phys} ${rho0} &
-                dx ${dxp} &
                 kernel roma &
                 gravity v_g_comp 0.0 0.0 &
                 check_every 2000
