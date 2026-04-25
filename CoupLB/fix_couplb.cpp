@@ -59,12 +59,13 @@ static bool is_couplb_keyword(const char* s)
      wall_vel vx vy vz   velocity for type-2 walls
      output N file       write velocity profile every N steps
      check_every N       stability check frequency
-     kernel {roma|peskin4}  IBM delta function (default roma)
-     vtk N prefix        write VTK field every N steps
-    vtk_region xlo xhi ylo yhi   VTK clipping region in physical units
-    vtk_solid attr ...   write solid atoms as VTK PolyData (.vtp) at VTK frequency
-     checkpoint N prefix write checkpoint every N steps
-     restart prefix      load checkpoint on init
+
+     kernel {roma|peskin4}        IBM delta function (default roma)
+     vtk N prefix                 write VTK field every N steps
+     vtk_region xlo xhi ylo yhi   VTK clipping region in physical units
+     vtk_solid attr ...           write solid atoms as VTK PolyData (.vtp) at VTK frequency
+     checkpoint N prefix          write checkpoint every N steps
+     restart prefix               load checkpoint on init
 ------------------------------------------------------------------ */
 
 FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
