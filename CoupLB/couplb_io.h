@@ -1,11 +1,15 @@
 #ifndef COUPLB_IO_H
 #define COUPLB_IO_H
 
+#include "atom.h"
 #include "couplb_lattice.h"
+#include "error.h"
 #include <mpi.h>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -247,6 +251,323 @@ public:
                         const std::vector<long>& steps,
                         double dt)
   {
+    write_pvd_impl(pvd_filename, vtk_prefix, steps, dt, "vti");
+  }
+
+  // ==================================================================
+  // PVD time series for solid VTK (.vtp)
+  // ==================================================================
+
+  static void write_pvd_vtp(const std::string& pvd_filename,
+                            const std::string& vtk_prefix,
+                            const std::vector<long>& steps,
+                            double dt)
+  {
+    write_pvd_impl(pvd_filename, vtk_prefix, steps, dt, "vtp");
+  }
+
+  // ==================================================================
+  // Solid VTK: atom data as VTK PolyData (.vtp)
+  //
+  // Writes user-specified atom attributes. Auto-detects vector groups
+  // (x/y/z, vx/vy/vz, etc.) and writes as 3-component arrays.
+  // No VTK library required — writes XML directly.
+  //
+  // Notes:
+  // - Always writes Points from atom->x (x,y,z), independent of attrs.
+  // - If x/y/z are requested and all 3 are present, writes a "position"
+  //   3-component PointData array (not 3 separate scalars).
+  // - All PointData arrays are written as Float64 (even id/type).
+  // ==================================================================
+
+  static void write_solid_vtk(MPI_Comm comm, long step,
+                             const std::string& prefix,
+                             const std::vector<std::string>& attrs,
+                             int nlocal, const int* mask, int groupbit,
+                             Atom* atom, Error* error)
+  {
+    int rank, nprocs;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &nprocs);
+
+    if (!atom) error->all(FLERR, "CoupLB IO: write_solid_vtk called with null atom pointer");
+    if (!mask) error->all(FLERR, "CoupLB IO: write_solid_vtk called with null mask pointer");
+
+    // --- Attribute registry ---
+    struct AttrInfo {
+      const char* name;
+      const char* vector_group; // empty string => scalar
+      int component;            // 0/1/2 for vectors
+      std::function<double(int)> get;
+    };
+
+    auto make_scalar = [](const char* n, std::function<double(int)> fn) -> AttrInfo {
+      return {n, "", 0, std::move(fn)};
+    };
+    auto make_vec = [](const char* n, const char* grp, int c, std::function<double(int)> fn) -> AttrInfo {
+      return {n, grp, c, std::move(fn)};
+    };
+
+    std::vector<AttrInfo> registry;
+    registry.reserve(32);
+
+    registry.push_back(make_scalar("id",   [&](int i) { return static_cast<double>(atom->tag[i]); }));
+    registry.push_back(make_scalar("type", [&](int i) { return static_cast<double>(atom->type[i]); }));
+
+    if (atom->molecule)
+      registry.push_back(make_scalar("mol", [&](int i) { return static_cast<double>(atom->molecule[i]); }));
+
+    if (atom->rmass)
+      registry.push_back(make_scalar("mass", [&](int i) { return atom->rmass[i]; }));
+    else if (atom->mass)
+      registry.push_back(make_scalar("mass", [&](int i) { return atom->mass[atom->type[i]]; }));
+
+    if (atom->radius)
+      registry.push_back(make_scalar("diameter", [&](int i) { return 2.0 * atom->radius[i]; }));
+
+    registry.push_back(make_vec("x",  "position", 0, [&](int i) { return atom->x[i][0]; }));
+    registry.push_back(make_vec("y",  "position", 1, [&](int i) { return atom->x[i][1]; }));
+    registry.push_back(make_vec("z",  "position", 2, [&](int i) { return atom->x[i][2]; }));
+
+    registry.push_back(make_vec("vx", "velocity", 0, [&](int i) { return atom->v[i][0]; }));
+    registry.push_back(make_vec("vy", "velocity", 1, [&](int i) { return atom->v[i][1]; }));
+    registry.push_back(make_vec("vz", "velocity", 2, [&](int i) { return atom->v[i][2]; }));
+
+    registry.push_back(make_vec("fx", "force", 0, [&](int i) { return atom->f[i][0]; }));
+    registry.push_back(make_vec("fy", "force", 1, [&](int i) { return atom->f[i][1]; }));
+    registry.push_back(make_vec("fz", "force", 2, [&](int i) { return atom->f[i][2]; }));
+
+    if (atom->mu) {
+      registry.push_back(make_vec("mux", "dipole", 0, [&](int i) { return atom->mu[i][0]; }));
+      registry.push_back(make_vec("muy", "dipole", 1, [&](int i) { return atom->mu[i][1]; }));
+      registry.push_back(make_vec("muz", "dipole", 2, [&](int i) { return atom->mu[i][2]; }));
+    }
+
+    if (atom->omega) {
+      registry.push_back(make_vec("omegax", "omega", 0, [&](int i) { return atom->omega[i][0]; }));
+      registry.push_back(make_vec("omegay", "omega", 1, [&](int i) { return atom->omega[i][1]; }));
+      registry.push_back(make_vec("omegaz", "omega", 2, [&](int i) { return atom->omega[i][2]; }));
+    }
+
+    if (atom->torque) {
+      registry.push_back(make_vec("tqx", "torque", 0, [&](int i) { return atom->torque[i][0]; }));
+      registry.push_back(make_vec("tqy", "torque", 1, [&](int i) { return atom->torque[i][1]; }));
+      registry.push_back(make_vec("tqz", "torque", 2, [&](int i) { return atom->torque[i][2]; }));
+    }
+
+    auto require_available = [&](const std::string& a) {
+      if (a == "mol" && !atom->molecule)
+        error->all(FLERR, "fix couplb vtk_solid: attribute 'mol' requires a molecular atom style");
+      if (a == "diameter" && !atom->radius)
+        error->all(FLERR, "fix couplb vtk_solid: attribute 'diameter' requires atom style sphere (radius)");
+      if ((a == "mux" || a == "muy" || a == "muz") && !atom->mu)
+        error->all(FLERR, "fix couplb vtk_solid: dipole attributes require dipole atom style (mu)");
+      if ((a == "omegax" || a == "omegay" || a == "omegaz") && !atom->omega)
+        error->all(FLERR, "fix couplb vtk_solid: omega attributes require atom style sphere (omega)");
+      if ((a == "tqx" || a == "tqy" || a == "tqz") && !atom->torque)
+        error->all(FLERR, "fix couplb vtk_solid: torque attributes require atom style sphere (torque)");
+      if (a == "mass" && !(atom->rmass || atom->mass))
+        error->all(FLERR, "fix couplb vtk_solid: attribute 'mass' requires per-atom mass (rmass) or type mass table");
+    };
+
+    // --- Resolve requested attributes (hard error on unknown/unavailable) ---
+    struct Requested {
+      const AttrInfo* info;
+    };
+
+    std::vector<const AttrInfo*> requested;
+    requested.reserve(attrs.size());
+
+    for (const auto& a : attrs) {
+      require_available(a);
+      const AttrInfo* found = nullptr;
+      for (const auto& r : registry) {
+        if (a == r.name) { found = &r; break; }
+      }
+      if (!found)
+        error->all(FLERR, "fix couplb vtk_solid: unknown attribute '{}'", a);
+      requested.push_back(found);
+    }
+
+    // --- Group vectors only when all 3 components were requested ---
+    struct OutputField {
+      std::string name;
+      int ncomp; // 1 or 3
+      std::function<double(int)> get[3];
+    };
+
+    std::vector<OutputField> fields;
+    fields.reserve(requested.size());
+    std::set<std::string> groups_done;
+
+    for (const auto* r : requested) {
+      if (r->vector_group && r->vector_group[0] != '\0') {
+        const std::string grp(r->vector_group);
+        if (groups_done.count(grp)) continue;
+
+        const AttrInfo* comp[3] = {nullptr, nullptr, nullptr};
+        for (const auto* q : requested) {
+          if (q->vector_group && strcmp(q->vector_group, r->vector_group) == 0) {
+            if (q->component < 0 || q->component > 2)
+              error->all(FLERR, "CoupLB IO: internal error: bad component index for '{}'", q->name);
+            comp[q->component] = q;
+          }
+        }
+
+        if (comp[0] && comp[1] && comp[2]) {
+          OutputField of;
+          of.name = grp;
+          of.ncomp = 3;
+          of.get[0] = comp[0]->get;
+          of.get[1] = comp[1]->get;
+          of.get[2] = comp[2]->get;
+          fields.push_back(std::move(of));
+          groups_done.insert(grp);
+        } else {
+          OutputField of;
+          of.name = r->name;
+          of.ncomp = 1;
+          of.get[0] = r->get;
+          fields.push_back(std::move(of));
+        }
+      } else {
+        OutputField of;
+        of.name = r->name;
+        of.ncomp = 1;
+        of.get[0] = r->get;
+        fields.push_back(std::move(of));
+      }
+    }
+
+    // --- Count local atoms in group ---
+    int ngroup = 0;
+    for (int i = 0; i < nlocal; i++)
+      if (mask[i] & groupbit) ngroup++;
+
+    // --- Pack: x,y,z always + requested fields ---
+    int doubles_per_atom = 3;
+    for (const auto& f : fields) doubles_per_atom += f.ncomp;
+
+    std::vector<double> lbuf;
+    lbuf.resize((size_t)ngroup * (size_t)doubles_per_atom);
+
+    int c = 0;
+    for (int i = 0; i < nlocal; i++) {
+      if (!(mask[i] & groupbit)) continue;
+
+      lbuf[c++] = atom->x[i][0];
+      lbuf[c++] = atom->x[i][1];
+      lbuf[c++] = atom->x[i][2];
+
+      for (const auto& f : fields) {
+        for (int d = 0; d < f.ncomp; d++)
+          lbuf[c++] = f.get[d](i);
+      }
+    }
+
+    const int nsend = ngroup * doubles_per_atom;
+
+    std::vector<int> counts(nprocs), displs(nprocs);
+    MPI_Gather(&nsend, 1, MPI_INT, counts.data(), 1, MPI_INT, 0, comm);
+
+    int total = 0;
+    if (rank == 0) {
+      displs[0] = 0;
+      for (int r = 1; r < nprocs; r++)
+        displs[r] = displs[r-1] + counts[r-1];
+      total = displs[nprocs-1] + counts[nprocs-1];
+    }
+
+    std::vector<double> gbuf;
+    if (rank == 0) gbuf.resize((size_t)total);
+
+    const double* sendptr = lbuf.empty() ? nullptr : lbuf.data();
+    double* recvptr = (rank == 0 && !gbuf.empty()) ? gbuf.data() : nullptr;
+
+    MPI_Gatherv(sendptr, nsend, MPI_DOUBLE,
+                recvptr, counts.data(), displs.data(), MPI_DOUBLE, 0, comm);
+
+    if (rank != 0) return;
+
+    if (total % doubles_per_atom != 0)
+      error->all(FLERR, "CoupLB IO: solid VTK gather size not divisible by record size");
+
+    const int ntotal = total / doubles_per_atom;
+
+    char fname[512];
+    snprintf(fname, sizeof(fname), "%s_solid_%06ld.vtp", prefix.c_str(), step);
+    FILE* fp = fopen(fname, "w");
+    if (!fp)
+      error->all(FLERR, "CoupLB IO: cannot open {}", fname);
+
+    fprintf(fp, "<?xml version=\"1.0\"?>\n");
+    fprintf(fp, "<VTKFile type=\"PolyData\" version=\"1.0\" byte_order=\"LittleEndian\">\n");
+    fprintf(fp, "  <PolyData>\n");
+    fprintf(fp, "    <Piece NumberOfPoints=\"%d\" NumberOfVerts=\"%d\" "
+                "NumberOfLines=\"0\" NumberOfStrips=\"0\" NumberOfPolys=\"0\">\n",
+            ntotal, ntotal);
+
+    // Points
+    fprintf(fp, "      <Points>\n");
+    fprintf(fp, "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" format=\"ascii\">\n");
+    for (int i = 0; i < ntotal; i++) {
+      const double* d = &gbuf[(size_t)i * (size_t)doubles_per_atom];
+      fprintf(fp, "%.8e %.8e %.8e\n", d[0], d[1], d[2]);
+    }
+    fprintf(fp, "        </DataArray>\n");
+    fprintf(fp, "      </Points>\n");
+
+    // Verts (one vertex per point)
+    fprintf(fp, "      <Verts>\n");
+    fprintf(fp, "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n");
+    for (int i = 0; i < ntotal; i++) fprintf(fp, "%d\n", i);
+    fprintf(fp, "        </DataArray>\n");
+    fprintf(fp, "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n");
+    for (int i = 0; i < ntotal; i++) fprintf(fp, "%d\n", i + 1);
+    fprintf(fp, "        </DataArray>\n");
+    fprintf(fp, "      </Verts>\n");
+
+    // PointData
+    fprintf(fp, "      <PointData>\n");
+
+    int field_offset = 3;
+    for (const auto& f : fields) {
+      if (f.ncomp == 1) {
+        fprintf(fp, "        <DataArray type=\"Float64\" Name=\"%s\" format=\"ascii\">\n", f.name.c_str());
+        for (int i = 0; i < ntotal; i++) {
+          const double val = gbuf[(size_t)i * (size_t)doubles_per_atom + (size_t)field_offset];
+          fprintf(fp, "%.8e\n", val);
+        }
+        fprintf(fp, "        </DataArray>\n");
+      } else {
+        fprintf(fp, "        <DataArray type=\"Float64\" Name=\"%s\" NumberOfComponents=\"3\" format=\"ascii\">\n",
+                f.name.c_str());
+        for (int i = 0; i < ntotal; i++) {
+          const double* d = &gbuf[(size_t)i * (size_t)doubles_per_atom + (size_t)field_offset];
+          fprintf(fp, "%.8e %.8e %.8e\n", d[0], d[1], d[2]);
+        }
+        fprintf(fp, "        </DataArray>\n");
+      }
+      field_offset += f.ncomp;
+    }
+
+    fprintf(fp, "      </PointData>\n");
+    fprintf(fp, "    </Piece>\n");
+    fprintf(fp, "  </PolyData>\n");
+    fprintf(fp, "</VTKFile>\n");
+    fclose(fp);
+
+    fprintf(stdout, "CoupLB: solid VTK written at step %ld -> %s (%d atoms, %d fields)\n",
+            step, fname, ntotal, (int)fields.size());
+  }
+
+private:
+
+  static void write_pvd_impl(const std::string& pvd_filename,
+                             const std::string& prefix,
+                             const std::vector<long>& steps,
+                             double dt, const char* ext)
+  {
     FILE* fp = fopen(pvd_filename.c_str(), "w");
     if (!fp) {
       fprintf(stderr, "CoupLB IO: cannot open %s\n", pvd_filename.c_str());
@@ -259,22 +580,22 @@ public:
     fprintf(fp, "  <Collection>\n");
 
     for (size_t i = 0; i < steps.size(); i++) {
-      char vti_name[512];
-      snprintf(vti_name, sizeof(vti_name), "%s_%06ld.vti",
-               vtk_prefix.c_str(), steps[i]);
-      // Extract basename (strip directory path if present)
-      const char* base = strrchr(vti_name, '/');
-      base = base ? base + 1 : vti_name;
+      char fname[512];
+      snprintf(fname, sizeof(fname), "%s_%06ld.%s", prefix.c_str(), steps[i], ext);
+
+      const char* base = strrchr(fname, '/');
+      base = base ? base + 1 : fname;
 
       const double time = steps[i] * dt;
-      fprintf(fp, "    <DataSet timestep=\"%.8e\" file=\"%s\"/>\n",
-              time, base);
+      fprintf(fp, "    <DataSet timestep=\"%.8e\" file=\"%s\"/>\n", time, base);
     }
 
     fprintf(fp, "  </Collection>\n");
     fprintf(fp, "</VTKFile>\n");
     fclose(fp);
   }
+
+public:
 
   // ==================================================================
   // Checkpoint: binary dump of distribution function f[]

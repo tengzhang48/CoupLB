@@ -71,6 +71,11 @@ private:
   std::vector<long> vtk_steps;
   bigint next_vtk;
 
+  // Solid VTK output (VTK PolyData .vtp)
+  bool vtk_solid_on;
+  std::vector<std::string> vtk_solid_attrs;
+  std::string vtk_solid_pvd_file;
+
   int checkpoint_every;
   std::string checkpoint_prefix;
   bigint next_checkpoint;
