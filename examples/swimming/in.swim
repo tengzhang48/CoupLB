@@ -1,0 +1,101 @@
+##########################################################################
+# Swimming robot from Hu et al. (2018) https://doi.org/10.1038/nature25443
+# 
+# NOTE: It may require trial and error to find values for:
+# xi_ibm, md_per_lb, and BPM damping parameters that work well.
+#
+# See write_lam.py for details on data file and parameter selection.
+##########################################################################
+units           cgs
+dimension       2
+atom_style      hybrid molecular bpm/sphere dipole
+boundary        p p p
+
+special_bonds   lj 0.0 1.0 1.0 coul 1.0 1.0 1.0
+newton          on off
+
+neighbor        0.02 nsq
+comm_modify     vel yes cutoff 0.03
+
+read_data       robot.lam
+
+group           robot type 1
+
+bond_style      bpm/rotational smooth no break no
+bond_coeff      1 9.0074e+03 3.0828e+04 3.4824e-01 2.5690e-01 &
+                  4.5037e+04 1.5414e+05 1.7412e+00 1.2845e+00 &
+                  1e-06 1e-06 1e-06 1e-06
+
+pair_style      zero 0.02
+pair_coeff      * * 0.02
+
+timestep        1e-7
+
+# --- Magnetic field (oscillating) ---
+variable        B_max equal 170.0
+variable        b     equal 0
+variable        angle_deg equal 0
+variable        bx    equal v_b*cos(v_angle_deg*PI/180)
+variable        by    equal v_b*sin(v_angle_deg*PI/180)
+
+# --- Dynamics ---
+fix             nve robot nve/bpm/sphere disc update dipole
+fix             efield robot efield v_bx v_by 0
+
+# Buoyancy-corrected gravity: g_eff = g * (rho_robot - rho_fluid) / rho_robot
+fix             grav robot gravity 453.5806 vector 0 -1 0
+
+fix             ibm robot couplb 640 960 1 0.01 0.1 &
+                xi_ibm 5.0 &
+                md_per_lb 167 &
+                kernel roma &
+                vtk 20000 vtk/robot &
+                vtk_region 1.2 2.0 2.0 2.8 &
+                vtk_solid id type mass vx vy vz fx fy fz
+
+fix             2d all enforce2d
+
+# --- Output ---
+variable        xcm equal xcm(robot,x)
+variable        ycm equal xcm(robot,y)
+
+thermo          2000
+thermo_style    custom step temp pe ke v_xcm v_ycm v_bx v_by
+thermo_modify   norm no
+
+# ============================================================
+# Phase 1: Ramp B
+# ============================================================
+variable        angle_deg equal 225
+variable        b equal ${B_max}*ramp(0,1)
+
+dump            1 all custom 20000 ramp.dump &
+                id type diameter x y vx vy mux muy fx fy tqz
+                
+run             400000
+
+undump          1
+
+# ============================================================
+# Phase 2: Swimming
+# ============================================================
+
+variable        cycle loop 10 
+variable        i equal v_cycle
+
+thermo_style    custom step temp pe ke v_xcm v_ycm v_i v_bx v_by
+
+dump            2 all custom 20000 swim.dump &
+                id type diameter x y vx vy mux muy fx fy tqz
+
+label           loopstart
+
+variable        b equal ${B_max}*ramp(-1,1)
+variable        angle_deg equal 45
+run             200000
+
+variable        b equal -${B_max}
+run             200000
+
+next            cycle
+jump            SELF loopstart
