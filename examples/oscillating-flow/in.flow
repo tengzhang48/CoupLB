@@ -1,0 +1,117 @@
+###############################################################################
+# Filament parameters
+
+variable    Nb equal 32
+variable    l equal 10
+variable    diam equal 1
+variable    d0 equal $(v_l/v_Nb)
+
+# Elastic moduli
+variable    E equal 1230.
+variable    G equal 473.
+
+###############################################################################
+units           lj
+dimension       3
+processors      5 3 3
+
+atom_style      hybrid molecular bpm/sphere dipole
+special_bonds   lj 0.0 1.0 1.0 coul 1.0 1.0 1.0
+newton          on off
+
+boundary        p f p
+neighbor        0.5 bin
+neigh_modify    delay 0 every 1
+comm_modify     mode single cutoff $(2*v_d0) vel yes
+
+read_data       filaments.lam
+group           bottom type 1
+group           interior type 2
+group           tip type 3
+
+group           middle molecule 3
+group           free union interior tip
+group           mobile intersect free middle
+
+# Track the tip of the rightmost filament
+variable        trackid equal 5*(v_Nb+1)
+group           track id ${trackid}
+
+variable        xt equal x[${trackid}]
+variable        yt equal y[${trackid}]
+variable        zt equal z[${trackid}]
+
+###############################################################################
+# BPM parameters
+
+variable    A equal (PI/4)*${diam}^2
+variable    I equal (PI/64)*${diam}^4
+variable    J equal (PI/32)*${diam}^4
+variable    Kr equal v_E*v_A/v_d0
+variable    Ks equal 12*v_E*v_I/v_d0^3
+variable    Kt equal v_G*v_J/v_d0
+variable    Kb equal v_E*v_I/v_d0
+
+bond_style  bpm/rotational smooth no break no
+bond_coeff  1 ${Kr} ${Ks} ${Kt} ${Kb} &
+            $(10*v_Kr) $(10*v_Ks) $(10*v_Kt) $(10*v_Kb) &
+            0.01 0.01 0.01 0.01
+
+pair_style  zero $(2*v_d0)
+pair_coeff  * * $(2*v_d0)
+
+###############################################################################
+# LBM parameters (LAMMPS units)
+
+variable    timestep equal 0.000992
+
+# Fluid
+variable    nuf equal 0.1
+variable    rhof equal 1.26
+
+# Body force
+variable    freq   equal 1e-3             # 1 Hz
+variable    omega  equal 2*PI*${freq}     # rad/ms
+variable    G0     equal 3.8e-3           
+variable    time   equal step*v_timestep
+variable    osc    equal ${freq}*v_time
+variable    gx_osc equal ${G0}*sin(2*PI*v_osc)
+
+###############################################################################
+# Dynamics
+timestep    ${timestep}
+
+compute     mytemp all temp/sphere
+compute     kerot all erotate/sphere
+
+thermo          8400
+thermo_style    custom step v_osc temp ke c_kerot pe
+thermo_modify   temp mytemp norm no
+
+variable    xt0 equal ${xt}
+variable    yt0 equal ${yt}
+variable    zt0 equal ${zt}
+
+variable    dxt equal v_xt-v_xt0
+variable    dyt equal v_yt-v_yt0
+variable    dzt equal v_zt-v_zt0
+
+thermo_style    custom step v_osc temp ke c_kerot pe v_dxt v_dyt v_dzt
+
+fix  print all print 8400 "${osc} ${dxt} ${dyt} ${dzt}" file right-tip.txt &
+     screen no title "cycle, dx [mm], dy [mm], dz [mm]"
+
+# dump 1 all custom 8400 filaments-fast.xyz id type mol mass diameter x y z vx vy vz fx fy fz
+
+fix  nve free nve/bpm/sphere
+
+fix  ibm free couplb 160 96 80 ${nuf} ${rhof} &
+     md_per_lb 84 &
+     wall_y 1 1 &
+     gravity v_gx_osc 0 0 &
+     output 25200 fluid.dat &
+     check_every 100800 &
+     vtk 25200 vtk/fluid &
+     vtk_solid id type mass vx vy vz fx fy fz
+
+run  10080000
