@@ -50,7 +50,6 @@ fix             push all addforce ${Fext} 0.0 0.0
 
 # LBM fluid: nu=0.1 -> nu_lb=0.1, tau=0.8
 fix             flow all couplb ${N} ${N} ${N} 0.1 1.0 &
-                dx 1.0 &
                 kernel roma &
                 output 1000 drag_profile.dat &
                 check_every 500

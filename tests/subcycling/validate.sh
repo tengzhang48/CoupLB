@@ -95,7 +95,6 @@ group           fluid_only empty
 timestep        ${DT_LB}
 
 fix flow fluid_only couplb ${NX} ${NY} 1 ${NU} ${RHO} &
-    dx ${DX} &
     wall_y 1 1 &
     gravity ${G0} 0.0 0.0 &
     kernel roma &
@@ -137,7 +136,6 @@ timestep        ${DT_LB}
 
 fix nve all nve
 fix flow all couplb ${NX} ${NY} 1 ${NU} ${RHO} &
-    dx ${DX} &
     wall_y 1 1 &
     gravity ${G0} 0.0 0.0 &
     kernel roma &
@@ -191,7 +189,6 @@ timestep        ${DT_B}
 
 fix nve all nve
 fix flow all couplb ${NX} ${NY} 1 ${NU} ${RHO} &
-    dx ${DX} &
     md_per_lb 4 &
     wall_y 1 1 &
     gravity ${G0} 0.0 0.0 &
@@ -246,7 +243,6 @@ timestep        ${DT_C}
 
 fix nve all nve
 fix flow all couplb ${NX} ${NY} 1 ${NU} ${RHO} &
-    dx ${DX} &
     md_per_lb 10 &
     wall_y 1 1 &
     gravity ${G0} 0.0 0.0 &
