@@ -17,8 +17,8 @@ set -uo pipefail
 #   bash validate.sh
 #   NPROCS=4 LAMMPS_BIN=lmp_couplb bash validate.sh
 
-LAMMPS_BIN="$HOME/coupLB/lammps-10Dec2025/lmp_couplb"
-NPROCS=${SLURM_NTASKS}
+LAMMPS_BIN="${LAMMPS_BIN:-$HOME/coupLB/lammps-10Dec2025/lmp_couplb}"
+NPROCS="${SLURM_NTASKS:-${NPROCS:-1}}"
 LMP="mpirun -n ${NPROCS} ${LAMMPS_BIN}"
 
 DX=0.625
