@@ -62,6 +62,15 @@ public:
     const int khi = region ? region[5] : Nz;
 
     const int Rx = ihi - ilo, Ry = jhi - jlo, Rz = khi - klo;
+    if (Rx <= 0 || Ry <= 0 || Rz <= 0) {
+      if (rank == 0) {
+        std::fprintf(stderr,
+                     "CoupLB::IO::write_vtk: invalid region "
+                     "[%d,%d) x [%d,%d) x [%d,%d); extents must be positive\n",
+                     ilo, ihi, jlo, jhi, klo, khi);
+      }
+      return;
+    }
     const size_t ntot = (size_t)Rx * Ry * Rz;
 
     const int nlx = grid.nx, nly = grid.ny;

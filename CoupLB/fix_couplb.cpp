@@ -388,6 +388,16 @@ void FixCoupLB::init()
       vtk_region[5] = std::max(0, std::min(vtk_region[5], Nz));
     }
 
+    // Validate ordering: hi > lo in all dimensions
+    if (vtk_region[1] <= vtk_region[0] ||
+        vtk_region[3] <= vtk_region[2] ||
+        vtk_region[5] <= vtk_region[4])
+        error->all(FLERR, "fix couplb vtk_region: empty or inverted region "
+                  "([%d,%d]x[%d,%d]x[%d,%d]). Check that xlo<xhi, ylo<yhi"
+                  "%s", vtk_region[0], vtk_region[1], vtk_region[2],
+                  vtk_region[3], vtk_region[4], vtk_region[5],
+                  is3d ? ", zlo<zhi" : "");
+
     // Snap physical bounds to actual node boundaries (for solid filtering)
     vtk_rlo[0] = domain_lo[0] + vtk_region[0] * dx;
     vtk_rhi[0] = domain_lo[0] + vtk_region[1] * dx;
@@ -397,12 +407,6 @@ void FixCoupLB::init()
     vtk_rhi[2] = domain_lo[2] + vtk_region[5] * dx;
 
     if (comm->me == 0 && screen) {
-      const int Rx = vtk_region[1] - vtk_region[0];
-      const int Ry = vtk_region[3] - vtk_region[2];
-      const int Rz = vtk_region[5] - vtk_region[4];
-      if (Rx <= 0 || Ry <= 0 || Rz <= 0)
-        fprintf(screen, "CoupLB WARNING: vtk_region is empty (%dx%dx%d)\n", Rx, Ry, Rz);
-
       if (is3d)
         fprintf(screen, "CoupLB: vtk_region [%.4f,%.4f]x[%.4f,%.4f]x[%.4f,%.4f] "
                 "-> nodes [%d,%d]x[%d,%d]x[%d,%d]\n",
