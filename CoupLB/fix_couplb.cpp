@@ -17,6 +17,26 @@
 using namespace LAMMPS_NS;
 using namespace FixConst;
 
+namespace {
+
+static bool is_couplb_keyword(const char* s)
+{
+  static const char* keywords[] = {
+    "md_per_lb", "xi_ibm", "gravity",
+    "wall_x", "wall_y", "wall_z", "wall_vel",
+    "output", "check_every", "kernel",
+    "vtk", "vtk_region", "vtk_solid",
+    "checkpoint", "restart",
+    nullptr
+  };
+
+  for (int i = 0; keywords[i]; i++)
+    if (strcmp(s, keywords[i]) == 0) return true;
+  return false;
+}
+
+} // anonymous namespace
+
 /* ------------------------------------------------------------------
    fix ID group couplb Nx Ny Nz nu rho keyword value ...
 
@@ -37,13 +57,15 @@ using namespace FixConst;
      wall_y lo hi        y-boundary: 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
      wall_z lo hi        z-boundary (3D only): 0=periodic 1=no-slip 2=moving 3=free-slip 4=open
      wall_vel vx vy vz   velocity for type-2 walls
-     dx value            grid spacing (default Lx/Nx)
      output N file       write velocity profile every N steps
      check_every N       stability check frequency
-     kernel {roma|peskin4}  IBM delta function (default roma)
-     vtk N prefix        write VTK field every N steps
-     checkpoint N prefix write checkpoint every N steps
-     restart prefix      load checkpoint on init
+
+     kernel {roma|peskin4}        IBM delta function (default roma)
+     vtk N prefix                 write VTK field every N steps
+     vtk_region xlo xhi ylo yhi   VTK clipping region in physical units
+     vtk_solid attr ...           write solid atoms as VTK PolyData (.vtp) at VTK frequency
+     checkpoint N prefix          write checkpoint every N steps
+     restart prefix               load checkpoint on init
 ------------------------------------------------------------------ */
 
 FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
@@ -72,9 +94,14 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
   do_restart = false;
   ibm_kernel = CoupLB::DeltaKernel::ROMA;
   ibm_has_particles = false;
+  vtk_solid_on = false;
+  has_vtk_region = false;
 
   int iarg = 8;
   while (iarg < narg) {
+    if (!is_couplb_keyword(arg[iarg]))
+      error->all(FLERR, "Unknown fix couplb keyword: {}", arg[iarg]);
+
     if (strcmp(arg[iarg],"md_per_lb")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb md_per_lb: need 1 value");
       md_per_lb = std::stoi(arg[iarg+1]); iarg += 2;
@@ -120,9 +147,6 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       wall_vel[1]=std::stod(arg[iarg+2]);
       wall_vel[2]=std::stod(arg[iarg+3]);
       iarg+=4;
-    } else if (strcmp(arg[iarg],"dx")==0) {
-      if (iarg+2>narg) error->all(FLERR,"fix couplb dx: need 1 value");
-      dx=std::stod(arg[iarg+1]); iarg+=2;
     } else if (strcmp(arg[iarg],"output")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb output: need 2 values");
       output_every=std::stoi(arg[iarg+1]); output_file=arg[iarg+2]; iarg+=3;
@@ -140,14 +164,45 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       vtk_every=std::stoi(arg[iarg+1]); vtk_prefix=arg[iarg+2];
       vtk_pvd_file = vtk_prefix + ".pvd";
       iarg+=3;
+    } else if (strcmp(arg[iarg],"vtk_region")==0) {
+      iarg++;
+      int nreg = 0;
+      while (iarg + nreg < narg && !is_couplb_keyword(arg[iarg + nreg]))
+        nreg++;
+      if (nreg != 4 && nreg != 6)
+        error->all(FLERR, "fix couplb vtk_region: need 4 values (2D: xlo xhi ylo yhi) "
+                   "or 6 values (3D: xlo xhi ylo yhi zlo zhi)");
+      vtk_rlo[0] = std::stod(arg[iarg]);
+      vtk_rhi[0] = std::stod(arg[iarg+1]);
+      vtk_rlo[1] = std::stod(arg[iarg+2]);
+      vtk_rhi[1] = std::stod(arg[iarg+3]);
+      if (nreg == 6) {
+        vtk_rlo[2] = std::stod(arg[iarg+4]);
+        vtk_rhi[2] = std::stod(arg[iarg+5]);
+      } else {
+        vtk_rlo[2] = -1e30;
+        vtk_rhi[2] =  1e30;
+      }
+      has_vtk_region = true;
+      iarg += nreg;
+    } else if (strcmp(arg[iarg],"vtk_solid")==0) {
+      if (vtk_solid_on)
+        error->all(FLERR, "fix couplb vtk_solid: keyword specified more than once");
+
+      vtk_solid_on = true;
+      iarg++;
+      while (iarg < narg && !is_couplb_keyword(arg[iarg])) {
+        vtk_solid_attrs.push_back(arg[iarg]);
+        iarg++;
+      }
+      if (vtk_solid_attrs.empty())
+        error->all(FLERR, "fix couplb vtk_solid: need at least one attribute");
     } else if (strcmp(arg[iarg],"checkpoint")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb checkpoint: need N prefix");
       checkpoint_every=std::stoi(arg[iarg+1]); checkpoint_prefix=arg[iarg+2]; iarg+=3;
     } else if (strcmp(arg[iarg],"restart")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb restart: need prefix");
       restart_prefix=arg[iarg+1]; do_restart=true; iarg+=2;
-    } else {
-      error->all(FLERR,"Unknown fix couplb keyword");
     }
   }
 
@@ -198,7 +253,26 @@ void FixCoupLB::init()
   }
 
   for (int d=0;d<3;d++) { domain_lo[d]=domain->boxlo[d]; domain_hi[d]=domain->boxhi[d]; }
-  if (dx<=0) dx = (domain_hi[0]-domain_lo[0]) / Nx;
+
+  // Compute grid spacing from domain bounds and grid dimensions.
+  // LBM requires cubic cells (dx = dy = dz).
+  const double dx_x = (domain_hi[0] - domain_lo[0]) / Nx;
+  const double dx_y = (domain_hi[1] - domain_lo[1]) / Ny;
+
+  if (std::fabs(dx_x - dx_y) > 1e-10 * dx_x)
+    error->all(FLERR, "fix couplb: non-cubic grid cells "
+               "(Lx/Nx={:.6e} != Ly/Ny={:.6e}). "
+               "Adjust Nx, Ny, or domain size.", dx_x, dx_y);
+
+  if (is3d) {
+    const double dx_z = (domain_hi[2] - domain_lo[2]) / Nz;
+    if (std::fabs(dx_x - dx_z) > 1e-10 * dx_x)
+      error->all(FLERR, "fix couplb: non-cubic grid cells "
+                 "(Lx/Nx={:.6e} != Lz/Nz={:.6e}). "
+                 "Adjust Nx, Nz, or domain size.", dx_x, dx_z);
+  }
+
+  dx = dx_x;
   inv_dx = 1.0 / dx;
 
   dt_LBM = update->dt * md_per_lb;
@@ -273,6 +347,80 @@ void FixCoupLB::init()
   }
 
   setup_ycomm();
+
+  if (vtk_solid_on) {
+    if (vtk_every <= 0)
+      error->all(FLERR, "fix couplb vtk_solid requires vtk keyword to set output frequency");
+    vtk_solid_pvd_file = vtk_prefix + "_solid.pvd";
+    if (comm->me == 0 && screen)
+      fprintf(screen, "CoupLB: vtk_solid with %d attributes\n", (int)vtk_solid_attrs.size());
+  }
+
+  if (has_vtk_region) {
+    // Clamp physical bounds to domain BEFORE integer conversion
+    vtk_rlo[0] = std::max(vtk_rlo[0], domain_lo[0]);
+    vtk_rhi[0] = std::min(vtk_rhi[0], domain_hi[0]);
+    vtk_rlo[1] = std::max(vtk_rlo[1], domain_lo[1]);
+    vtk_rhi[1] = std::min(vtk_rhi[1], domain_hi[1]);
+    vtk_rlo[2] = std::max(vtk_rlo[2], domain_lo[2]);
+    vtk_rhi[2] = std::min(vtk_rhi[2], domain_hi[2]);
+
+    // Convert physical bounds to node indices
+    vtk_region[0] = (int)std::floor((vtk_rlo[0] - domain_lo[0]) / dx);
+    vtk_region[1] = (int)std::ceil ((vtk_rhi[0] - domain_lo[0]) / dx);
+    vtk_region[2] = (int)std::floor((vtk_rlo[1] - domain_lo[1]) / dx);
+    vtk_region[3] = (int)std::ceil ((vtk_rhi[1] - domain_lo[1]) / dx);
+    if (is3d) {
+      vtk_region[4] = (int)std::floor((vtk_rlo[2] - domain_lo[2]) / dx);
+      vtk_region[5] = (int)std::ceil ((vtk_rhi[2] - domain_lo[2]) / dx);
+    } else {
+      vtk_region[4] = 0;
+      vtk_region[5] = 1;
+    }
+
+    // Clamp to valid node range
+    vtk_region[0] = std::max(0, std::min(vtk_region[0], Nx));
+    vtk_region[1] = std::max(0, std::min(vtk_region[1], Nx));
+    vtk_region[2] = std::max(0, std::min(vtk_region[2], Ny));
+    vtk_region[3] = std::max(0, std::min(vtk_region[3], Ny));
+    if (is3d) {
+      vtk_region[4] = std::max(0, std::min(vtk_region[4], Nz));
+      vtk_region[5] = std::max(0, std::min(vtk_region[5], Nz));
+    }
+
+    // Validate ordering: hi > lo in all dimensions
+    if (vtk_region[1] <= vtk_region[0] ||
+        vtk_region[3] <= vtk_region[2] ||
+        vtk_region[5] <= vtk_region[4])
+        error->all(FLERR, "fix couplb vtk_region: empty or inverted region "
+                  "([%d,%d]x[%d,%d]x[%d,%d]). Check that xlo<xhi, ylo<yhi"
+                  "%s", vtk_region[0], vtk_region[1], vtk_region[2],
+                  vtk_region[3], vtk_region[4], vtk_region[5],
+                  is3d ? ", zlo<zhi" : "");
+
+    // Snap physical bounds to actual node boundaries (for solid filtering)
+    vtk_rlo[0] = domain_lo[0] + vtk_region[0] * dx;
+    vtk_rhi[0] = domain_lo[0] + vtk_region[1] * dx;
+    vtk_rlo[1] = domain_lo[1] + vtk_region[2] * dx;
+    vtk_rhi[1] = domain_lo[1] + vtk_region[3] * dx;
+    vtk_rlo[2] = domain_lo[2] + vtk_region[4] * dx;
+    vtk_rhi[2] = domain_lo[2] + vtk_region[5] * dx;
+
+    if (comm->me == 0 && screen) {
+      if (is3d)
+        fprintf(screen, "CoupLB: vtk_region [%.4f,%.4f]x[%.4f,%.4f]x[%.4f,%.4f] "
+                "-> nodes [%d,%d]x[%d,%d]x[%d,%d]\n",
+                vtk_rlo[0], vtk_rhi[0], vtk_rlo[1], vtk_rhi[1],
+                vtk_rlo[2], vtk_rhi[2],
+                vtk_region[0], vtk_region[1], vtk_region[2],
+                vtk_region[3], vtk_region[4], vtk_region[5]);
+      else
+        fprintf(screen, "CoupLB: vtk_region [%.4f,%.4f]x[%.4f,%.4f] "
+                "-> nodes [%d,%d]x[%d,%d]\n",
+                vtk_rlo[0], vtk_rhi[0], vtk_rlo[1], vtk_rhi[1],
+                vtk_region[0], vtk_region[1], vtk_region[2], vtk_region[3]);
+    }
+  }
 
   if (comm->me==0 && screen) {
     fprintf(screen,"CoupLB: %dD grid %dx%dx%d tau=%.6f nu=%.6f rho=%.4f\n", dim,Nx,Ny,Nz,tau,nu,rho);
@@ -406,9 +554,20 @@ void FixCoupLB::setup(int vflag)
       write_profile(*grid3d, update->ntimestep);
     }
     if (vtk_every > 0) {
-      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
+      const int* vreg = has_vtk_region ? vtk_region : nullptr;
+      const double* srlo = has_vtk_region ? vtk_rlo : nullptr;
+      const double* srhi = has_vtk_region ? vtk_rhi : nullptr;
+      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho, vreg);
+      if (vtk_solid_on)
+        CoupLB::IO<CoupLB::D3Q19>::write_solid_vtk(world, step, vtk_prefix, vtk_solid_attrs,
+                                                   atom->nlocal, atom->mask, groupbit, atom, error,
+                                                   srlo, srhi);
       vtk_steps.push_back(step);
-      if (comm->me == 0) CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+      if (comm->me == 0) {
+        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        if (vtk_solid_on)
+          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+      }
     }
   } else {
     if (need_macro) grid2d->compute_macroscopic(false);
@@ -428,9 +587,20 @@ void FixCoupLB::setup(int vflag)
       write_profile(*grid2d, update->ntimestep);
     }
     if (vtk_every > 0) {
-      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
+      const int* vreg = has_vtk_region ? vtk_region : nullptr;
+      const double* srlo = has_vtk_region ? vtk_rlo : nullptr;
+      const double* srhi = has_vtk_region ? vtk_rhi : nullptr;
+      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho, vreg);
+      if (vtk_solid_on)
+        CoupLB::IO<CoupLB::D2Q9>::write_solid_vtk(world, step, vtk_prefix, vtk_solid_attrs,
+                                                  atom->nlocal, atom->mask, groupbit, atom, error,
+                                                  srlo, srhi);
       vtk_steps.push_back(step);
-      if (comm->me == 0) CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+      if (comm->me == 0) {
+        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        if (vtk_solid_on)
+          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+      }
     }
   }
 }
@@ -648,9 +818,20 @@ void FixCoupLB::end_of_step()
     if (chk) check_stability_precomputed(*grid3d);
     if (out) write_profile(*grid3d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
+      const int* vreg = has_vtk_region ? vtk_region : nullptr;
+      const double* srlo = has_vtk_region ? vtk_rlo : nullptr;
+      const double* srhi = has_vtk_region ? vtk_rhi : nullptr;
+      CoupLB::IO<CoupLB::D3Q19>::write_vtk(*grid3d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho, vreg);
+      if (vtk_solid_on)
+        CoupLB::IO<CoupLB::D3Q19>::write_solid_vtk(world, (long)step, vtk_prefix, vtk_solid_attrs,
+                                                   atom->nlocal, atom->mask, groupbit, atom, error,
+                                                   srlo, srhi);
       vtk_steps.push_back((long)step);
-      if (comm->me==0) CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+      if (comm->me==0) {
+        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        if (vtk_solid_on)
+          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+      }
     }
     if (ckpt) CoupLB::IO<CoupLB::D3Q19>::write_checkpoint(*grid3d, world, (long)step, checkpoint_prefix);
   } else {
@@ -658,9 +839,20 @@ void FixCoupLB::end_of_step()
     if (chk) check_stability_precomputed(*grid2d);
     if (out) write_profile(*grid2d, step);
     if (vtk) {
-      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho);
+      const int* vreg = has_vtk_region ? vtk_region : nullptr;
+      const double* srlo = has_vtk_region ? vtk_rlo : nullptr;
+      const double* srhi = has_vtk_region ? vtk_rhi : nullptr;
+      CoupLB::IO<CoupLB::D2Q9>::write_vtk(*grid2d, world, (long)step, vtk_prefix, domain_lo, dx, vel_scale, force_scale, rho, vreg);
+      if (vtk_solid_on)
+        CoupLB::IO<CoupLB::D2Q9>::write_solid_vtk(world, (long)step, vtk_prefix, vtk_solid_attrs,
+                                                  atom->nlocal, atom->mask, groupbit, atom, error,
+                                                  srlo, srhi);
       vtk_steps.push_back((long)step);
-      if (comm->me==0) CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+      if (comm->me==0) {
+        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        if (vtk_solid_on)
+          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+      }
     }
     if (ckpt) CoupLB::IO<CoupLB::D2Q9>::write_checkpoint(*grid2d, world, (long)step, checkpoint_prefix);
   }
