@@ -92,7 +92,7 @@ fix ID group couplb Nx Ny Nz nu rho0 [keywords...]
 | Keyword | Arguments | Default | Description |
 |:--------|:----------|:--------|:------------|
 | `md_per_lb` | N | 1 | MD (LAMMPS) steps per LBM step. Enables sub-stepping: the LBM advances once every N MD steps, with fresh IBM interpolation and force spreading each sub-step. |
-| `xi_ibm` | value | 1.0 | IBM relaxation factor (0 < ξ ≤ 1). Scales the penalty force that couples particles to the fluid. Values less than 1.0 soften the coupling. |
+| `xi_ibm` | value | 1.0 | IBM relaxation factor (ξ ≥ 0). Scales the penalty force that couples particles to the fluid: `0` disables IBM coupling, values between `0` and `1` soften the coupling, `1.0` is the nominal default strength, and values greater than `1` increase the coupling strength. |
 | `gravity` | gx gy gz | 0 0 0 | Body force acceleration on the fluid, in **LAMMPS units**. Each component can be a numeric constant or a LAMMPS equal-style variable reference (`v_varname`). Converted internally via g\* = g × dt\_LB² / dx. |
 | `wall_x` | lo hi | 0 0 | X-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
 | `wall_y` | lo hi | 0 0 | Y-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
