@@ -1,22 +1,31 @@
-# 2D Poiseuille flow — STABLE PARAMETERS FOR COUPLB v8.2
-# NOTE: dx is IMPLICITLY 1.0 (lattice units). Physical scaling via gravity/timestep.
+# 2D Poiseuille flow -- CoupLB validation
+# Grid 16x64, dx=1.0, nu=0.1, rho=1.0, tau=0.8
+# g=5e-6, u_max~2.6e-2, Ma~0.044
+# Validate: python validate.py poiseuille couplb_poiseuille.dat 5e-6
+
 units           lj
 dimension       2
-boundary        p f p          # Periodic x, walls y, periodic z
+boundary        p f p
 atom_style      atomic
 
-# CRITICAL: Minimum 16x64 grid (4x32 was unstable)
 region          box block 0.0 16.0 0.0 64.0 -0.5 0.5
 create_box      1 box
-create_atoms    1 single 8.0 32.0 0.0   # Dummy atom (required by LAMMPS)
+create_atoms    1 single 8.0 32.0 0.0
 mass            1 1.0
 pair_style      none
 
-timestep        0.005          # Small timestep for stability
+group           noatoms empty
 
-# FIXED: Removed dx keyword (not supported). Reduced gravity for stability.
-fix flow all couplb 16 64 1 0.1 1.0 wall_y 1 1 gravity 5e-7 0.0 0.0 kernel roma output 400 couplb_poiseuille.dat check_every 200
-thermo          1
-thermo_style    custom step cpu temp press
+timestep        1.0
+
+fix flow noatoms couplb 16 64 1 0.1 1.0 &
+    wall_y 1 1 &
+    gravity 5e-6 0.0 0.0 &
+    kernel roma &
+    output 400 couplb_poiseuille.dat &
+    check_every 200
+
+thermo          1000
+thermo_style    custom step cpu
 run             20000
-print "=== Poiseuille test done ==="
+print "=== 2D Poiseuille test done ==="

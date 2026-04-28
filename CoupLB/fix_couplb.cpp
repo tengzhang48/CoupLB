@@ -175,8 +175,8 @@ void FixCoupLB::init()
 {
   if (md_per_lb < 1)
     error->all(FLERR, "fix couplb: md_per_lb must be >= 1");
-  if (xi_ibm <= 0.0 || xi_ibm > 1.0)
-    error->all(FLERR, "fix couplb: xi_ibm must be in (0, 1]");
+  if (xi_ibm < 0.0)
+    error->all(FLERR, "fix couplb: xi_ibm cannot be negative");
 
   if (gxstr) {
     gxvar = input->variable->find(gxstr);
