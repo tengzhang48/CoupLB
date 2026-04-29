@@ -104,28 +104,31 @@ public:
     const double dvr = dvl / cell_vol;
 
     double ws = 0.0;
-    for (int k=((Lattice::D==3)?k0-1:0); k<=((Lattice::D==3)?k0+2:0); k++) {
-      if (Lattice::D==3 && (k<0||k>=g.gz)) continue;
-      for (int j=j0-1;j<=j0+2;j++) { if(j<0||j>=g.gy) continue;
-        for (int i=i0-1;i<=i0+2;i++) { if(i<0||i>=g.gx) continue;
-          if (g.type[g.idx(i,j,k)]!=0) continue;
-          ws += delta_product(kern, lx-i, ly-j, lz-k);
-        }
-      }
-    }
-    if (ws < Constants::DELTA_TOL) return;
-
-    const double sc = dvr / ws;
+    double dcache[64];
+    int    ncache[64];
+    int    ncache_count = 0;
     for (int k=((Lattice::D==3)?k0-1:0); k<=((Lattice::D==3)?k0+2:0); k++) {
       if (Lattice::D==3 && (k<0||k>=g.gz)) continue;
       for (int j=j0-1;j<=j0+2;j++) { if(j<0||j>=g.gy) continue;
         for (int i=i0-1;i<=i0+2;i++) { if(i<0||i>=g.gx) continue;
           const int n = g.idx(i,j,k);
           if (g.type[n]!=0) continue;
-          const double w = delta_product(kern, lx-i, ly-j, lz-k) * sc;
-          g.fx[n] += fxl*w; g.fy[n] += fyl*w; g.fz[n] += fzl*w;
+          const double d = delta_product(kern, lx-i, ly-j, lz-k);
+          dcache[ncache_count] = d;
+          ncache[ncache_count] = n;
+          ncache_count++;
+          ws += d;
         }
       }
+    }
+    if (ws < Constants::DELTA_TOL) return;
+
+    const double sc = dvr / ws;
+    for (int i = 0; i < ncache_count; i++) {
+      const double w = dcache[i] * sc;
+      g.fx[ncache[i]] += fxl*w;
+      g.fy[ncache[i]] += fyl*w;
+      g.fz[ncache[i]] += fzl*w;
     }
   }
 };

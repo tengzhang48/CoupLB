@@ -104,7 +104,9 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
 
     if (strcmp(arg[iarg],"md_per_lb")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb md_per_lb: need 1 value");
-      md_per_lb = std::stoi(arg[iarg+1]); iarg += 2;
+      md_per_lb = std::stoi(arg[iarg+1]);
+      if (md_per_lb < 1) error->all(FLERR, "fix couplb: md_per_lb must be >= 1");
+      iarg += 2;
     } else if (strcmp(arg[iarg],"xi_ibm")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb xi_ibm: need 1 value");
       xi_ibm = std::stod(arg[iarg+1]); iarg += 2;
@@ -134,13 +136,22 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       iarg+=4;
     } else if (strcmp(arg[iarg],"wall_x")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb wall_x: need 2 values");
-      wall_xlo=std::stoi(arg[iarg+1]); wall_xhi=std::stoi(arg[iarg+2]); iarg+=3;
+      wall_xlo=std::stoi(arg[iarg+1]); wall_xhi=std::stoi(arg[iarg+2]);
+      if (wall_xlo < 0 || wall_xlo > 4 || wall_xhi < 0 || wall_xhi > 4)
+        error->all(FLERR, "fix couplb: wall_x types must be in [0,4]");
+      iarg+=3;
     } else if (strcmp(arg[iarg],"wall_y")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb wall_y: need 2 values");
-      wall_ylo=std::stoi(arg[iarg+1]); wall_yhi=std::stoi(arg[iarg+2]); iarg+=3;
+      wall_ylo=std::stoi(arg[iarg+1]); wall_yhi=std::stoi(arg[iarg+2]);
+      if (wall_ylo < 0 || wall_ylo > 4 || wall_yhi < 0 || wall_yhi > 4)
+        error->all(FLERR, "fix couplb: wall_y types must be in [0,4]");
+      iarg+=3;
     } else if (strcmp(arg[iarg],"wall_z")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb wall_z: need 2 values");
-      wall_zlo=std::stoi(arg[iarg+1]); wall_zhi=std::stoi(arg[iarg+2]); iarg+=3;
+      wall_zlo=std::stoi(arg[iarg+1]); wall_zhi=std::stoi(arg[iarg+2]);
+      if (wall_zlo < 0 || wall_zlo > 4 || wall_zhi < 0 || wall_zhi > 4)
+        error->all(FLERR, "fix couplb: wall_z types must be in [0,4]");
+      iarg+=3;
     } else if (strcmp(arg[iarg],"wall_vel")==0) {
       if (iarg+4>narg) error->all(FLERR,"fix couplb wall_vel: need 3 values");
       wall_vel[0]=std::stod(arg[iarg+1]);
@@ -702,21 +713,31 @@ void FixCoupLB::do_ibm_sub_coupling(CoupLB::Grid<L>& g, CoupLB::Streaming<L>& s,
   const int nl = atom->nlocal;
   const int *mk = atom->mask;
 
-  enforce_wall_ghost_fields(g);
+  // Wall ghost fields were already enforced at the end of do_lbm_step.
+  // No need to repeat here: compute_macroscopic() only updates fluid
+  // nodes, and exchange_velocity() skips wall faces, so wall ghost
+  // values remain valid until the next LBM step.
 
-  if (first) {
-    int ng = 0;
-    for (int i = 0; i < nl; i++) if (mk[i] & groupbit) ng++;
-    int ng_global = 0;
-    MPI_Allreduce(&ng, &ng_global, 1, MPI_INT, MPI_SUM, world);
-    ibm_has_particles = (ng_global > 0);
-    if (!ibm_has_particles) return;
+  // Check for particles every substep so late-arriving particles couple
+  // immediately rather than waiting for the next LBM cycle.
+  int ng = 0;
+  for (int i = 0; i < nl; i++) if (mk[i] & groupbit) ng++;
+  int ng_global = 0;
+  MPI_Allreduce(&ng, &ng_global, 1, MPI_INT, MPI_SUM, world);
+  bool has_particles = (ng_global > 0);
 
+  if (!has_particles) {
+    ibm_has_particles = false;
+    return;
+  }
+
+  // Prepare fluid velocity field once per LBM cycle, or when particles
+  // first appear after a no-particle interval.
+  if (first || !ibm_has_particles) {
     g.compute_macroscopic(false);
     s.exchange_velocity(g);
   }
-
-  if (!ibm_has_particles) return;
+  ibm_has_particles = true;
 
   const double xi_over_dtLBM = xi_ibm / dt_LBM;
   const double inv_N = 1.0 / static_cast<double>(md_per_lb);
