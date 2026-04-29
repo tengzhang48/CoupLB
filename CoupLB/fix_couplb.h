@@ -71,6 +71,16 @@ private:
   std::vector<long> vtk_steps;
   bigint next_vtk;
 
+  // Solid VTK output (VTK PolyData .vtp)
+  bool vtk_solid_on;
+  std::vector<std::string> vtk_solid_attrs;
+  std::string vtk_solid_pvd_file;
+
+  // VTK region clipping (physical coordinates)
+  bool has_vtk_region;
+  double vtk_rlo[3], vtk_rhi[3];   // user-specified physical bounds
+  int vtk_region[6];                // node indices: {ilo, ihi, jlo, jhi, klo, khi}
+
   int checkpoint_every;
   std::string checkpoint_prefix;
   bigint next_checkpoint;

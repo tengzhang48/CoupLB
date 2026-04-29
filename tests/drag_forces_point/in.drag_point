@@ -11,12 +11,13 @@
 #   3. v_y, v_z remain at machine-zero (no spurious transverse motion)
 #   4. v_x reaches a positive, steady terminal velocity
 #
-# Parameters:
-#   Grid:    32x32x32 cells, dx_phys=1.0 → domain 32x32x32 LJ
-#   LBM:     nu=0.1, tau=0.8, rho0=1.0
-#   Timing:  timestep=0.01, dt_lbm=0.01
-#   Scales:  vel_scale = dx/dt_lbm = 100, force_scale = rho0*dx^4/dt^2 = 1e4
-#   Force:   F=0.001 LJ → F_lat = 1e-7 (very low Ma, Re << 1)
+# Parameters (all in LAMMPS units, nu is PHYSICAL kinematic viscosity):
+#   Grid:    32x32x32 cells, dx = 1.0 -> domain 32x32x32 LJ
+#   LBM:     nu=0.1, rho0=1.0
+#   Timing:  timestep=1.0, dt_LB=1.0 (md_per_lb=1)
+#   Derived: nu_lb = nu*dt/dx^2 = 0.1, tau = 0.8
+#   Scales:  vel_scale = dx/dt = 1.0, force_scale = rho*dx^4/dt^2 = 1.0
+#   Force:   F = 0.001 LJ -> F_lat = 1e-3 (very low Ma, Re << 1)
 #
 # Run: mpirun -np 8 lmp_mpi -in in.drag_point
 # Ref: mpirun -np 1 lmp_mpi -in in.drag_point  (remove processors line)
@@ -28,10 +29,10 @@ boundary        p p p
 atom_style      atomic
 atom_modify     map array
 
-# 8 CPUs: 2x2x2 → 16x16x16 cells/rank (well above Roma minimum of 3)
+# 8 CPUs: 2x2x2 -> 16x16x16 cells/rank (well above Roma minimum of 3)
 processors      2 2 2
 
-# Domain: 32^3 cells with dx=1.0 → box 32x32x32
+# Domain: 32^3 cells with dx=1.0 -> box 32x32x32
 variable        N equal 32
 variable        half equal ${N}/2.0
 
@@ -41,15 +42,14 @@ create_atoms    1 single 0.0 0.0 0.0
 mass            1 1.0
 
 pair_style      none
-timestep        0.01
+timestep        1.0
 
 # External force on particle (constant push in +x)
 variable        Fext equal 0.001
 fix             push all addforce ${Fext} 0.0 0.0
 
-# LBM fluid: nu=0.1 → tau=0.8, dx=1.0 (box length / N cells)
+# LBM fluid: nu=0.1 -> nu_lb=0.1, tau=0.8
 fix             flow all couplb ${N} ${N} ${N} 0.1 1.0 &
-                dx 1.0 &
                 kernel roma &
                 output 1000 drag_profile.dat &
                 check_every 500
@@ -77,7 +77,7 @@ run             10000
 # Phase 2: Steady-state measurement
 # ============================================================================
 print "========================================================"
-print "  POINT-FORCE DRAG VALIDATION (CoupLB v8.2)"
+print "  POINT-FORCE DRAG VALIDATION"
 print "========================================================"
 print "  Grid:         ${N}x${N}x${N}, dx=1.0"
 print "  nu=0.1, tau=0.8, rho0=1.0"

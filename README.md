@@ -92,15 +92,16 @@ fix ID group couplb Nx Ny Nz nu rho0 [keywords...]
 | Keyword | Arguments | Default | Description |
 |:--------|:----------|:--------|:------------|
 | `md_per_lb` | N | 1 | MD (LAMMPS) steps per LBM step. Enables sub-stepping: the LBM advances once every N MD steps, with fresh IBM interpolation and force spreading each sub-step. |
-| `xi_ibm` | value | 1.0 | IBM relaxation factor (0 < ξ ≤ 1). Scales the penalty force that couples particles to the fluid. Values less than 1.0 soften the coupling. |
+| `xi_ibm` | value | 1.0 | IBM relaxation factor (ξ ≥ 0). Scales the penalty force that couples particles to the fluid: `0` disables IBM coupling, values between `0` and `1` soften the coupling, `1.0` is the nominal default strength, and values greater than `1` increase the coupling strength. |
 | `gravity` | gx gy gz | 0 0 0 | Body force acceleration on the fluid, in **LAMMPS units**. Each component can be a numeric constant or a LAMMPS equal-style variable reference (`v_varname`). Converted internally via g\* = g × dt\_LB² / dx. |
-| `dx` | value | Lx/Nx | Physical grid spacing in **LAMMPS units**. Must satisfy Nx × dx = Lx. If omitted, computed automatically from the simulation box. |
 | `wall_x` | lo hi | 0 0 | X-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
 | `wall_y` | lo hi | 0 0 | Y-boundary type: 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
 | `wall_z` | lo hi | 0 0 | Z-boundary type (3D only): 0 = periodic, 1 = no-slip, 2 = moving wall, 3 = free-slip, 4 = open. |
 | `wall_vel` | vx vy vz | 0 0 0 | Velocity for type-2 (moving) walls, in **LAMMPS units**. Converted to lattice units internally. |
 | `kernel` | type | roma | IBM delta function: `roma` (3-point) or `peskin4` (4-point). |
 | `vtk` | N prefix | off | Write VTK field snapshot every N LAMMPS steps. |
+| `vtk_region` | xlo xhi ylo yhi [zlo zhi] | full domain | Clip fluid `.vti` and solid `.vtp` output to a physical subregion. Accepts 4 values (2D) or 6 values (3D). Coordinates are in **LAMMPS units**, snapped to node boundaries internally. Requires `vtk` to be set. |
+| `vtk_solid` | attr1 attr2 ... | off | Write atom attributes as VTK PolyData (`.vtp`) at the same frequency as `vtk`. Attribute list is terminated by the next recognized keyword. Requires `vtk` to be set. |
 | `checkpoint` | N prefix | off | Write binary checkpoint every N LAMMPS steps. |
 | `restart` | prefix | none | Load fluid state from checkpoint at initialization. |
 | `output` | N file | off | Write y-averaged ASCII velocity profiles every N LAMMPS steps. |
@@ -234,7 +235,7 @@ CoupLB performs three types of ghost exchange along each dimension:
 
 When `vtk N prefix` is enabled, CoupLB writes:
 
-- **`prefix_STEP.vti`** — Single VTK ImageData file containing the full 3D field. All ranks gather data to rank 0 for writing. Suitable for grids up to ~128³.
+- **`prefix_STEP.vti`** — Single VTK ImageData file containing the fluid field (full domain, or clipped to `vtk_region` if specified). All ranks gather data to rank 0 for writing. Suitable for grids up to ~128³.
 - **`prefix.pvd`** — ParaView collection file linking all `.vti` files with simulation time. Updated after each VTK dump, so it remains valid even if the run crashes.
 
 **To visualize:** Open the `.pvd` file in ParaView → Apply. Use the time slider to scrub through frames.
@@ -247,6 +248,46 @@ Fields written:
 | `velocity_phys` | 3 (vector) | LAMMPS physical units |
 | `force_phys` | 3 (vector) | LAMMPS physical units |
 | `type` | 1 (scalar) | 0 = fluid, 1 = no-slip wall, 2 = moving wall, 3 = free-slip, 4 = open |
+
+### Solid VTK Output (`vtk_solid`)
+
+When `vtk_solid attr1 attr2 ...` is enabled (and `vtk N prefix` is also set), CoupLB writes:
+
+- **`prefix_solid_STEP.vtp`** — VTK PolyData point cloud of atoms in the fix group (filtered by `vtk_region` if specified).
+- **`prefix_solid.pvd`** — ParaView collection file linking all `.vtp` files with simulation time.
+
+Notes:
+
+- Point coordinates always come from atom positions (`x y z`), regardless of requested attributes.
+- If all three components of a vector group are requested (e.g., `vx vy vz`), they are written as a 3-component PointData array (e.g., `velocity`). Otherwise, components are written as individual scalars.
+- All arrays are written as `Float64` in the VTK file.
+
+Example:
+
+```lammps
+fix ibm robot couplb ... vtk 1000 vtk/robot vtk_solid id type vx vy vz fx fy fz diameter
+```
+
+### VTK Region Clipping (`vtk_region`)
+
+When `vtk_region xlo xhi ylo yhi` (2D) or `vtk_region xlo xhi ylo yhi zlo zhi` (3D) is specified, both fluid `.vti` and solid `.vtp` output are clipped to the given physical region. Coordinates are in LAMMPS units.
+
+The fix converts physical bounds to node indices internally using floor/ceil, then snaps the physical bounds back to exact node boundaries so that solid atom filtering matches the fluid region precisely. In 2D mode (4 args), the z range defaults to the full domain.
+
+This is useful for reducing file size when only a portion of the domain is of interest (e.g., the region around a swimmer or cilia array).
+
+Example:
+
+```lammps
+fix ibm all couplb 160 96 80 0.1 1.26 &
+    vtk 6300 vtk/cilia &
+    vtk_region 30.0 70.0 0.0 15.0 20.0 30.0 &
+    vtk_solid id type vx vy vz fx fy fz diameter &
+    wall_y 1 1 &
+    ...
+```
+
+This outputs only the 40×15×10 mm region around the cilia, rather than the full 100×60×50 mm domain.
 
 ### ASCII Profiles
 
@@ -420,7 +461,6 @@ atom_style      hybrid bpm/rotational dipole
 timestep        0.001
 
 fix lb all couplb 64 48 32 0.1 1.26 &
-    dx 0.625 &
     md_per_lb 10 &
     xi_ibm 0.1 &
     wall_y 1 1 &
@@ -471,7 +511,7 @@ run 100000
 
 ## TODO
 
-- [ ] Add integration tests for `md_per_lb`, `xi_ibm`, and variable gravity (`v_varname`) keywords
+- [ ] Add integration tests for `xi_ibm` and variable gravity (`v_varname`) keywords
 - [ ] Handle edge/corner nodes for mixed-wall configurations (e.g., free-slip on one axis + no-slip on another)
 - [ ] Early exit on VTK file open failure (broadcast I/O status to all ranks before gather)
 - [ ] Re-add `nsub` (multiple LBM per MD) if applications require it
