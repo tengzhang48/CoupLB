@@ -77,6 +77,12 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
 
   Nx = std::stoi(arg[3]); Ny = std::stoi(arg[4]); Nz = std::stoi(arg[5]);
   nu = std::stod(arg[6]); rho = std::stod(arg[7]);
+  if (Nx <= 0 || Ny <= 0 || Nz <= 0)
+    error->all(FLERR, "fix couplb: Nx, Ny, and Nz must be positive");
+  if (nu <= 0.0 || !std::isfinite(nu))
+    error->all(FLERR, "fix couplb: viscosity must be positive and finite");
+  if (rho <= 0.0 || !std::isfinite(rho))
+    error->all(FLERR, "fix couplb: density must be positive and finite");
 
   md_per_lb = 1;
   md_sub_count = 0;
@@ -109,7 +115,10 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       iarg += 2;
     } else if (strcmp(arg[iarg],"xi_ibm")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb xi_ibm: need 1 value");
-      xi_ibm = std::stod(arg[iarg+1]); iarg += 2;
+      xi_ibm = std::stod(arg[iarg+1]);
+      if (xi_ibm <= 0.0 || xi_ibm > 1.0 || !std::isfinite(xi_ibm))
+        error->all(FLERR, "fix couplb: xi_ibm must satisfy 0 < xi_ibm <= 1");
+      iarg += 2;
     } else if (strcmp(arg[iarg],"gravity")==0) {
       if (iarg+4>narg) error->all(FLERR,"fix couplb gravity: need 3 values");
       if (strstr(arg[iarg+1],"v_") == arg[iarg+1]) {
@@ -160,10 +169,14 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
       iarg+=4;
     } else if (strcmp(arg[iarg],"output")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb output: need 2 values");
-      output_every=std::stoi(arg[iarg+1]); output_file=arg[iarg+2]; iarg+=3;
+      output_every=std::stoi(arg[iarg+1]); output_file=arg[iarg+2];
+      if (output_every < 0) error->all(FLERR, "fix couplb: output frequency cannot be negative");
+      iarg+=3;
     } else if (strcmp(arg[iarg],"check_every")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb check_every: need 1 value");
-      check_every=std::stoi(arg[iarg+1]); iarg+=2;
+      check_every=std::stoi(arg[iarg+1]);
+      if (check_every < 0) error->all(FLERR, "fix couplb: check_every cannot be negative");
+      iarg+=2;
     } else if (strcmp(arg[iarg],"kernel")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb kernel: need 1 value");
       if (strcmp(arg[iarg+1],"roma")==0) ibm_kernel = CoupLB::DeltaKernel::ROMA;
@@ -173,6 +186,7 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
     } else if (strcmp(arg[iarg],"vtk")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb vtk: need N prefix");
       vtk_every=std::stoi(arg[iarg+1]); vtk_prefix=arg[iarg+2];
+      if (vtk_every < 0) error->all(FLERR, "fix couplb: vtk frequency cannot be negative");
       vtk_pvd_file = vtk_prefix + ".pvd";
       iarg+=3;
     } else if (strcmp(arg[iarg],"vtk_region")==0) {
@@ -210,7 +224,9 @@ FixCoupLB::FixCoupLB(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg),
         error->all(FLERR, "fix couplb vtk_solid: need at least one attribute");
     } else if (strcmp(arg[iarg],"checkpoint")==0) {
       if (iarg+3>narg) error->all(FLERR,"fix couplb checkpoint: need N prefix");
-      checkpoint_every=std::stoi(arg[iarg+1]); checkpoint_prefix=arg[iarg+2]; iarg+=3;
+      checkpoint_every=std::stoi(arg[iarg+1]); checkpoint_prefix=arg[iarg+2];
+      if (checkpoint_every < 0) error->all(FLERR, "fix couplb: checkpoint frequency cannot be negative");
+      iarg+=3;
     } else if (strcmp(arg[iarg],"restart")==0) {
       if (iarg+2>narg) error->all(FLERR,"fix couplb restart: need prefix");
       restart_prefix=arg[iarg+1]; do_restart=true; iarg+=2;
@@ -241,8 +257,8 @@ void FixCoupLB::init()
 {
   if (md_per_lb < 1)
     error->all(FLERR, "fix couplb: md_per_lb must be >= 1");
-  if (xi_ibm < 0.0)
-    error->all(FLERR, "fix couplb: xi_ibm cannot be negative");
+  if (xi_ibm <= 0.0 || xi_ibm > 1.0 || !std::isfinite(xi_ibm))
+    error->all(FLERR, "fix couplb: xi_ibm must satisfy 0 < xi_ibm <= 1");
 
   if (gxstr) {
     gxvar = input->variable->find(gxstr);
@@ -534,7 +550,12 @@ void FixCoupLB::setup_ycomm()
 
 void FixCoupLB::setup(int vflag)
 {
-  post_force(vflag);
+  (void) vflag;
+
+  // LAMMPS calls setup() before the first timestep. Initialize IBM
+  // forces for the first fluid step, but do not advance the LBM state:
+  // step-0 output should represent the actual initial condition.
+  ibm_sub_coupling();
 
   // Flush any IBM ghost forces from the setup substep
   if (md_per_lb > 1) {
@@ -575,9 +596,9 @@ void FixCoupLB::setup(int vflag)
                                                    srlo, srhi);
       vtk_steps.push_back(step);
       if (comm->me == 0) {
-        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, update->dt);
         if (vtk_solid_on)
-          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, update->dt);
       }
     }
   } else {
@@ -608,9 +629,9 @@ void FixCoupLB::setup(int vflag)
                                                   srlo, srhi);
       vtk_steps.push_back(step);
       if (comm->me == 0) {
-        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, update->dt);
         if (vtk_solid_on)
-          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, update->dt);
       }
     }
   }
@@ -849,9 +870,9 @@ void FixCoupLB::end_of_step()
                                                    srlo, srhi);
       vtk_steps.push_back((long)step);
       if (comm->me==0) {
-        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        CoupLB::IO<CoupLB::D3Q19>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, update->dt);
         if (vtk_solid_on)
-          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+          CoupLB::IO<CoupLB::D3Q19>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, update->dt);
       }
     }
     if (ckpt) CoupLB::IO<CoupLB::D3Q19>::write_checkpoint(*grid3d, world, (long)step, checkpoint_prefix);
@@ -870,9 +891,9 @@ void FixCoupLB::end_of_step()
                                                   srlo, srhi);
       vtk_steps.push_back((long)step);
       if (comm->me==0) {
-        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, dt_LBM);
+        CoupLB::IO<CoupLB::D2Q9>::write_pvd(vtk_pvd_file, vtk_prefix, vtk_steps, update->dt);
         if (vtk_solid_on)
-          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, dt_LBM);
+          CoupLB::IO<CoupLB::D2Q9>::write_pvd_vtp(vtk_solid_pvd_file, vtk_prefix + "_solid", vtk_steps, update->dt);
       }
     }
     if (ckpt) CoupLB::IO<CoupLB::D2Q9>::write_checkpoint(*grid2d, world, (long)step, checkpoint_prefix);
@@ -887,37 +908,72 @@ void FixCoupLB::write_profile(CoupLB::Grid<L>& g, bigint step)
   for(int k=0;k<nz;k++) for(int j=0;j<nyl;j++) for(int i=0;i<nx;i++) {
     const int n=g.lidx(i,j,k); ul[j]+=g.ux[n]; vl[j]+=g.uy[n]; rl[j]+=g.rho[n];
   }
-  for(int j=0;j<nyl;j++) { ul[j]/=cxz; vl[j]/=cxz; rl[j]/=cxz; }
+  std::vector<int> cl(nyl,cxz);
 
   int me; MPI_Comm_rank(world,&me);
 
-  auto write_data = [&](FILE* fp, int ny_tot, const double* ux_d, const double* uy_d, const double* rho_d, int yo) {
-    fprintf(fp,"# step = %ld\n",(long)step);
-    for(int j=0;j<ny_tot;j++)
-    fprintf(fp,"%ld %d %.6f %.8f %.10e %.10e\n",(long)step,j,domain_lo[1]+(double)(yo+j)*dx,rho*rho_d[j],vel_scale*ux_d[j],vel_scale*uy_d[j]);
-    fprintf(fp,"\n");
+  std::vector<double> y_ul(Ny,0.0), y_vl(Ny,0.0), y_rl(Ny,0.0);
+  std::vector<int> y_cl(Ny,0);
+
+  auto fill_direct_y = [&]() {
+    for (int j=0;j<nyl;j++) {
+      const int gy = g.offset[1] + j;
+      if (gy < 0 || gy >= Ny) continue;
+      y_ul[gy] = ul[j];
+      y_vl[gy] = vl[j];
+      y_rl[gy] = rl[j];
+      y_cl[gy] = cl[j];
+    }
   };
 
   if (!ycomm_valid) {
-    if (me==0) {
-      FILE* fp=fopen(output_file.c_str(), "a");
-      if (!fp) { if(screen) fprintf(screen,"CoupLB WARNING: cannot open %s\n",output_file.c_str()); return; }
-      write_data(fp,nyl,ul.data(),vl.data(),rl.data(),g.offset[1]); fclose(fp);
-    }
+    fill_direct_y();
   } else {
     int yr,ys; MPI_Comm_rank(ycomm,&yr); MPI_Comm_size(ycomm,&ys);
     std::vector<int> cnt(ys), dsp(ys);
     MPI_Gather(&nyl,1,MPI_INT,cnt.data(),1,MPI_INT,0,ycomm);
     int nyt=0; if(yr==0) for(int i=0;i<ys;i++){dsp[i]=nyt;nyt+=cnt[i];}
     std::vector<double> ua,va,ra;
-    if(yr==0){ua.resize(nyt);va.resize(nyt);ra.resize(nyt);}
+    std::vector<int> ca;
+    if(yr==0){ua.resize(nyt);va.resize(nyt);ra.resize(nyt);ca.resize(nyt);}
     MPI_Gatherv(ul.data(),nyl,MPI_DOUBLE,ua.data(),cnt.data(),dsp.data(),MPI_DOUBLE,0,ycomm);
     MPI_Gatherv(vl.data(),nyl,MPI_DOUBLE,va.data(),cnt.data(),dsp.data(),MPI_DOUBLE,0,ycomm);
     MPI_Gatherv(rl.data(),nyl,MPI_DOUBLE,ra.data(),cnt.data(),dsp.data(),MPI_DOUBLE,0,ycomm);
-    if(me==0&&yr==0) {
-      FILE* fp=fopen(output_file.c_str(), "a");
-      if(!fp){if(screen)fprintf(screen,"CoupLB WARNING: cannot open %s\n",output_file.c_str());}
-      else{write_data(fp,nyt,ua.data(),va.data(),ra.data(),0); fclose(fp);}
+    MPI_Gatherv(cl.data(),nyl,MPI_INT,ca.data(),cnt.data(),dsp.data(),MPI_INT,0,ycomm);
+    if (yr==0) {
+      for (int j=0;j<nyt && j<Ny;j++) {
+        y_ul[j] = ua[j];
+        y_vl[j] = va[j];
+        y_rl[j] = ra[j];
+        y_cl[j] = ca[j];
+      }
     }
+  }
+
+  std::vector<double> ux_sum(Ny,0.0), uy_sum(Ny,0.0), rho_sum(Ny,0.0);
+  std::vector<int> cell_count(Ny,0);
+  MPI_Reduce(y_ul.data(),ux_sum.data(),Ny,MPI_DOUBLE,MPI_SUM,0,world);
+  MPI_Reduce(y_vl.data(),uy_sum.data(),Ny,MPI_DOUBLE,MPI_SUM,0,world);
+  MPI_Reduce(y_rl.data(),rho_sum.data(),Ny,MPI_DOUBLE,MPI_SUM,0,world);
+  MPI_Reduce(y_cl.data(),cell_count.data(),Ny,MPI_INT,MPI_SUM,0,world);
+
+  auto write_data = [&](FILE* fp) {
+    fprintf(fp,"# step = %ld\n",(long)step);
+    for(int j=0;j<Ny;j++) {
+      const double inv_count = (cell_count[j] > 0) ? 1.0 / cell_count[j] : 0.0;
+      const double rho_avg = rho_sum[j] * inv_count;
+      const double ux_avg = ux_sum[j] * inv_count;
+      const double uy_avg = uy_sum[j] * inv_count;
+      fprintf(fp,"%ld %d %.6f %.8f %.10e %.10e\n",
+              (long)step,j,domain_lo[1]+(double)j*dx,
+              rho*rho_avg,vel_scale*ux_avg,vel_scale*uy_avg);
+    }
+    fprintf(fp,"\n");
+  };
+
+  if (me==0) {
+    FILE* fp=fopen(output_file.c_str(), "a");
+    if (!fp) { if(screen) fprintf(screen,"CoupLB WARNING: cannot open %s\n",output_file.c_str()); return; }
+    write_data(fp); fclose(fp);
   }
 }

@@ -219,8 +219,8 @@ private:
 
     // Self-periodic: ghost forces accumulate onto opposite interior face
     if (is_self_periodic(d) && ds>=4) {
-      accum_face_force(g, d, gl, lf);   // ghost_lo --> interior lo_face
-      accum_face_force(g, d, gh, hf);   // ghost_hi --> interior hi_face
+      accum_face_force(g, d, gl, hf);   // ghost_lo --> interior hi_face
+      accum_face_force(g, d, gh, lf);   // ghost_hi --> interior lo_face
       return;
     }
     if (neigh[d][0]==MPI_PROC_NULL && neigh[d][1]==MPI_PROC_NULL) return;

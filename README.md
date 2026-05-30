@@ -86,6 +86,7 @@ Full syntax, keyword table, and extended examples: **[docs/keywords.md](docs/key
 | [docs/theory.md](docs/theory.md) | Unit conversion, IBM coupling, stability, accuracy |
 | [docs/parallelism.md](docs/parallelism.md) | MPI decomposition, ghost exchange, OpenMP |
 | [docs/io.md](docs/io.md) | VTK, solid output, profiles, checkpoint/restart |
+| [docs/DEVNOTES_2026-05-30.md](docs/DEVNOTES_2026-05-30.md) | Notes on setup, periodic IBM, PVD time, and profile fixes |
 
 ## IBM Coupling (overview)
 
